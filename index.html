@@ -505,13 +505,13 @@
 
   // What the popup inputs ask for (up to three). `whole` means no decimals.
   const STRENGTH_FIELDS = [
-    { key: "reps", placeholder: "reps", label: "Reps", min: 1, whole: true },
-    { key: "weight", placeholder: "weight", label: "Weight in kg", min: 0 },
+    { key: "reps", placeholder: "reps", unit: " reps", label: "Reps", min: 1, whole: true },
+    { key: "weight", placeholder: "weight", unit: " kg", label: "Weight in kg", min: 0 },
   ];
   const CARDIO_FIELDS = [
-    { key: "incline", placeholder: "incline %", label: "Incline percent", min: 0 },
-    { key: "speed", placeholder: "km/h", label: "Speed in km/h", min: 0.1 },
-    { key: "minutes", placeholder: "mins", label: "Time in minutes", min: 1, whole: true },
+    { key: "incline", placeholder: "incline %", unit: "%", label: "Incline percent", min: 0 },
+    { key: "speed", placeholder: "km/h", unit: " km/h", label: "Speed in km/h", min: 0.1 },
+    { key: "minutes", placeholder: "mins", unit: " mins", label: "Time in minutes", min: 1, whole: true },
   ];
 
   const SPLIT_COLOURS = ["--coral", "--periwinkle", "--butter", "--sky", "--sage"];
@@ -826,15 +826,19 @@
   }
 
   function openLog(exercise) {
+    const data = loadData();
+    const pastSets = data.sets[exercise] || [];
+    const lastSet = pastSets[pastSets.length - 1] || {};
     currentExercise = exercise;
-    currentFields = loadData().cardio.includes(exercise) ? CARDIO_FIELDS : STRENGTH_FIELDS;
+    currentFields = data.cardio.includes(exercise) ? CARDIO_FIELDS : STRENGTH_FIELDS;
     logForm.reset();
     logForm.classList.toggle("three-fields", currentFields.length === 3);
     logInputs.forEach((input, i) => {
       const field = currentFields[i];
       input.hidden = !field;
       if (!field) return;
-      input.placeholder = field.placeholder;
+      // Show the last logged value as the hint, or the field's name if there isn't one.
+      input.placeholder = field.key in lastSet ? `${lastSet[field.key]}${field.unit}` : field.placeholder;
       input.setAttribute("aria-label", field.label);
       input.inputMode = field.whole ? "numeric" : "decimal";
     });
