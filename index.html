@@ -464,6 +464,10 @@
     line-height: 1.3;
   }
   .name-editor .primary:disabled { background: var(--line); }
+  .purge-inputs { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--gap); }
+  .name-editor .purge-inputs input { padding: 0; text-align: center; font-size: 1.5rem; }
+  #purge-go:not(:disabled) { background: var(--coral); }
+  #purge-open { color: var(--coral); }
 
   #toast {
     position: fixed;
@@ -535,6 +539,7 @@
   <p class="hint section-label">Your splits</p>
   <div id="split-list" class="edit-list"></div>
   <button id="redo-setup" class="quiet">Redo setup</button>
+  <button id="purge-open" class="quiet">Purge history</button>
   <div class="bottom-bar">
     <button class="back" data-go="" aria-label="Back">←</button>
     <button id="add-split" class="primary" data-add-split>+ ADD SPLIT</button>
@@ -616,6 +621,18 @@
     <input id="body-weight" type="text" inputmode="decimal" placeholder="Today's weight in kg" aria-label="Today's body weight in kilograms" autocomplete="off">
     <p>Both optional. Weight is saved against today.</p>
     <button id="body-save" class="primary">SAVE</button>
+  </form>
+</dialog>
+
+<dialog id="purge-editor" class="name-editor">
+  <form>
+    <div class="purge-inputs">
+      <input type="text" inputmode="numeric" maxlength="4" placeholder="days" aria-label="Days" autocomplete="off">
+      <input type="text" inputmode="numeric" maxlength="4" placeholder="hours" aria-label="Hours" autocomplete="off">
+      <input type="text" inputmode="numeric" maxlength="4" placeholder="mins" aria-label="Minutes" autocomplete="off">
+    </div>
+    <p id="purge-preview"></p>
+    <button id="purge-go" class="primary">DELETE</button>
   </form>
 </dialog>
 
@@ -917,7 +934,7 @@
     const mergedJson = JSON.stringify(merged);
     if (mergedJson !== JSON.stringify(current)) {
       saveData(merged);
-      const popupOpen = logDialog.open || editor.open || splitEditor.open || nicknameEditor.open || bodyEditor.open;
+      const popupOpen = logDialog.open || editor.open || splitEditor.open || nicknameEditor.open || bodyEditor.open || purgeEditor.open;
       if (!popupOpen) showScreen();
     }
     if (!remote || mergedJson !== JSON.stringify(remote)) await uploadProfile(merged);
@@ -983,6 +1000,10 @@
   const bodyHeight = document.getElementById("body-height");
   const bodyWeight = document.getElementById("body-weight");
   const bodySave = document.getElementById("body-save");
+  const purgeEditor = document.getElementById("purge-editor");
+  const purgeInputs = [...purgeEditor.querySelectorAll("input")];
+  const purgePreview = document.getElementById("purge-preview");
+  const purgeGo = document.getElementById("purge-go");
   const logHistory = document.getElementById("log-history");
   const logDelete = document.getElementById("log-delete");
   const logDialog = document.getElementById("log");
@@ -1455,6 +1476,7 @@
     splitEditor.close();
     nicknameEditor.close();
     bodyEditor.close();
+    purgeEditor.close();
 
     // Once there are logged sets the nickname is locked in, so they can't land on someone else's profile.
     const hasSets = Object.keys(data.sets).length > 0;
@@ -1992,6 +2014,89 @@
     }
   });
 
+  // Entries only store a date, but their id starts with the exact time they were logged. Anything
+  // without a readable time counts as the start of its day, so a purge can't overreach.
+  function loggedAt(entry) {
+    const time = parseInt(entry.id.split("-")[0], 36);
+    if (entry.id.includes("-") && time > Date.UTC(2020, 0) && time <= Date.now() + 86400000) return time;
+    const [year, month, day] = entry.date.split("-").map(Number);
+    return new Date(year, month - 1, day).getTime();
+  }
+
+  function purgeWindowMs() {
+    const [days, hours, minutes] = purgeInputs.map((input) => Number(input.value));
+    return (days * 24 * 60 + hours * 60 + minutes) * 60000;
+  }
+
+  // What the current numbers would delete.
+  function purgeTargets(data) {
+    const cutoff = Date.now() - purgeWindowMs();
+    const recent = (entry) => loggedAt(entry) >= cutoff;
+    return {
+      sets: Object.values(data.sets).flat().filter(recent).length,
+      weighIns: (data.body || []).filter(recent).length,
+      recent,
+    };
+  }
+
+  function countText(count, word) {
+    return `${count} ${word}${count === 1 ? "" : "s"}`;
+  }
+
+  function purgeSummary({ sets, weighIns }) {
+    return weighIns ? `${countText(sets, "set")} and ${countText(weighIns, "weigh-in")}` : countText(sets, "set");
+  }
+
+  function updatePurge() {
+    if (purgeWindowMs() === 0) {
+      purgePreview.textContent = "Delete everything logged in the last...";
+      purgeGo.disabled = true;
+      return;
+    }
+    const targets = purgeTargets(loadData());
+    const nothing = targets.sets + targets.weighIns === 0;
+    purgePreview.textContent = nothing ? "Nothing logged in that time." : `This deletes ${purgeSummary(targets)}.`;
+    purgeGo.disabled = nothing;
+  }
+
+  function openPurge() {
+    purgeInputs.forEach((input) => { input.value = ""; });
+    updatePurge();
+    purgeEditor.showModal();
+  }
+
+  purgeInputs.forEach((input) => {
+    input.addEventListener("input", () => {
+      input.value = input.value.replace(/\D/g, "");
+      updatePurge();
+    });
+  });
+
+  document.getElementById("purge-open").addEventListener("click", openPurge);
+
+  // Deleted ids are remembered, so a sync can't bring anything back from another copy.
+  // Splits, exercises and settings aren't touched.
+  purgeEditor.querySelector("form").addEventListener("submit", (event) => {
+    event.preventDefault();
+    if (purgeGo.disabled) return;
+    const summary = purgeSummary(purgeTargets(loadData()));
+    if (!confirm(`Delete ${summary}? This can't be undone, and it applies on all your devices.`)) return;
+    const saved = updateData((data) => {
+      const { recent } = purgeTargets(data);
+      const removed = [...Object.values(data.sets).flat(), ...(data.body || [])].filter(recent).map((entry) => entry.id);
+      for (const name of Object.keys(data.sets)) {
+        data.sets[name] = data.sets[name].filter((set) => !recent(set));
+        if (data.sets[name].length === 0) delete data.sets[name];
+      }
+      if (data.body) data.body = data.body.filter((entry) => !recent(entry));
+      data.deleted = [...(data.deleted || []), ...removed].sort();
+    }, false);
+    if (saved) {
+      showToast("deleted");
+      showScreen();
+    }
+  });
+
   function deleteWeighIn(id) {
     if (!confirm("Delete this weight? This can't be undone.")) return;
     const saved = updateData((data) => {
@@ -2020,7 +2125,7 @@
   });
 
   // Tapping outside a popup closes it without saving.
-  for (const dialog of [logDialog, editor, splitEditor, nicknameEditor, bodyEditor]) {
+  for (const dialog of [logDialog, editor, splitEditor, nicknameEditor, bodyEditor, purgeEditor]) {
     dialog.addEventListener("click", (event) => {
       if (event.target === dialog) dialog.close();
     });
