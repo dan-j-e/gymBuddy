@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Gym Buddy</title>
 <link rel="icon" type="image/png" href="icon.png">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
@@ -74,6 +74,9 @@
     height: 100vh;
     height: 100dvh; /* dvh excludes the phone browser's address bar; vh is the fallback */
     padding: var(--gap);
+    /* Keeps headers clear of the notch, status bar and iPhone's glass blur */
+    padding-top: max(var(--gap), env(safe-area-inset-top));
+    padding-bottom: max(var(--gap), env(safe-area-inset-bottom));
   }
   .screen[hidden] { display: none; }
 
@@ -334,11 +337,13 @@
     font-size: 0.95rem;
   }
 
-  /* Popups: mid-screen for thumb reach, but above where the keypad opens */
+  /* Popups sit right on top of the keypad, or at the bottom of the screen without one.
+     --keypad-height is measured in the script. */
   dialog {
     width: min(calc(100vw - 2 * var(--gap)), 420px);
-    margin: 33vh auto auto;
-    margin-top: 33dvh;
+    top: auto;
+    bottom: calc(var(--keypad-height, 0px) + var(--gap));
+    margin: 0 auto;
     padding: 0; /* so a click on the dialog itself can only mean the backdrop */
     background: var(--card);
     color: inherit;
@@ -370,8 +375,6 @@
 
   #tick { height: 64px; min-height: 0; font-size: 1.75rem; }
   #tick:disabled { background: var(--line); }
-
-  dialog.name-editor { margin-top: 18dvh; }
 
   .name-editor form {
     display: flex;
@@ -1595,6 +1598,21 @@
       if (event.target === dialog) dialog.close();
     });
   }
+
+  // Phones don't report the keypad directly, but the visible area shrinks when it opens.
+  function trackKeypad() {
+    const visible = window.visualViewport;
+    if (!visible) return;
+    const update = () => {
+      const covered = document.documentElement.clientHeight - visible.height - visible.offsetTop;
+      document.documentElement.style.setProperty("--keypad-height", `${Math.max(0, covered)}px`);
+    };
+    visible.addEventListener("resize", update);
+    visible.addEventListener("scroll", update);
+    update();
+  }
+
+  trackKeypad();
 
   window.addEventListener("hashchange", () => {
     reordering = false;
