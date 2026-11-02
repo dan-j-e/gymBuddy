@@ -6,6 +6,12 @@
 <title>Gym Buddy</title>
 <link rel="icon" type="image/png" href="icon.png">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#201f22">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Gym Buddy">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <style>
   * { box-sizing: border-box; margin: 0; }
 
@@ -97,6 +103,21 @@
     font-size: 0.85rem;
     line-height: 1.3;
   }
+
+  #install-hint {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: var(--gap);
+    padding: 10px;
+    background: var(--card);
+    border-radius: 28px;
+  }
+  #install-hint[hidden] { display: none; }
+  #install-text { flex: 1; min-width: 0; }
+  #install-go { flex: 0 0 auto; min-height: 48px; padding: 0 16px; background: var(--butter); color: var(--ink); }
+  #install-go[hidden] { display: none; }
+  #install-dismiss { height: 48px; background: var(--line); }
 
   #greeting {
     padding: 14px 8px 8px;
@@ -514,6 +535,11 @@
 <main id="landing" class="screen" hidden>
   <p id="greeting"></p>
   <p id="sync-status" class="hint" hidden></p>
+  <div id="install-hint" hidden>
+    <p id="install-text" class="hint"></p>
+    <button id="install-go" class="wide-pill" hidden>INSTALL</button>
+    <button id="install-dismiss" class="move" aria-label="Dismiss">✕</button>
+  </div>
   <div id="split-rows" class="row-list"></div>
   <div class="bottom-bar">
     <button class="wide-pill" data-go="progress">PROGRESS</button>
@@ -2130,6 +2156,51 @@
       if (event.target === dialog) dialog.close();
     });
   }
+
+  // A one-time nudge to install the app, shown only in a browser tab. Android offers its own
+  // install button; iPhones can only do it by hand from the Share menu.
+  const INSTALL_DISMISSED_KEY = "gymTracker.installHintDismissed";
+  const installHint = document.getElementById("install-hint");
+  const installText = document.getElementById("install-text");
+  const installGo = document.getElementById("install-go");
+  let installPrompt = null;
+
+  function isInstalled() {
+    return window.matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+  }
+
+  function isIphone() {
+    return /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  }
+
+  function updateInstallHint() {
+    const wanted = !isInstalled() && !localStorage.getItem(INSTALL_DISMISSED_KEY) && (installPrompt || isIphone());
+    installHint.hidden = !wanted;
+    installGo.hidden = !installPrompt;
+    installText.textContent = installPrompt
+      ? "Install Gym Buddy for quick access. Your logs stay safe under your nickname."
+      : "Add to your home screen: tap Share, then Add to Home Screen. Then enter this nickname there.";
+  }
+
+  window.addEventListener("beforeinstallprompt", (event) => {
+    event.preventDefault();
+    installPrompt = event;
+    updateInstallHint();
+  });
+
+  installGo.addEventListener("click", async () => {
+    installPrompt.prompt();
+    await installPrompt.userChoice;
+    installPrompt = null;
+    updateInstallHint();
+  });
+
+  document.getElementById("install-dismiss").addEventListener("click", () => {
+    localStorage.setItem(INSTALL_DISMISSED_KEY, "1");
+    updateInstallHint();
+  });
+
+  updateInstallHint();
 
   // Phones don't report the keypad directly, but the visible area shrinks when it opens.
   function trackKeypad() {

@@ -2,7 +2,7 @@
 // Each open shows the saved copy and quietly fetches a fresh one, so an update appears
 // the open after it's downloaded. Only the app's own files go through here, never logged data.
 const CACHE = "gym-buddy-v1";
-const FILES = ["./", "icon.png", "apple-touch-icon.png"];
+const FILES = ["./", "manifest.webmanifest", "icon.png", "apple-touch-icon.png", "icon-192.png", "icon-512.png"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(FILES)).then(() => self.skipWaiting()));
