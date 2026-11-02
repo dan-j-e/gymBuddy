@@ -19,7 +19,9 @@ self.addEventListener("fetch", (event) => {
   event.respondWith(caches.open(CACHE).then(async (cache) => {
     const key = event.request.mode === "navigate" ? "./" : event.request;
     const saved = await cache.match(key, { ignoreSearch: true });
-    const fresh = fetch(event.request).then((response) => {
+    // "no-cache" asks GitHub whether there's a newer copy, rather than reusing the browser's own
+    // copy, which GitHub says is fine to keep for 10 minutes and would delay updates.
+    const fresh = fetch(event.request.url, { cache: "no-cache" }).then((response) => {
       if (response.ok) cache.put(key, response.clone());
       return response;
     });
