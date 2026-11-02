@@ -85,6 +85,13 @@
     overflow-wrap: anywhere;
   }
 
+  .hint {
+    padding: 0 8px;
+    color: var(--muted);
+    font-size: 0.85rem;
+    line-height: 1.3;
+  }
+
   #greeting {
     padding: 14px 8px 8px;
     color: var(--muted);
@@ -245,11 +252,10 @@
   /* With an odd number of exercises, the last one spans the full width */
   .bubble:last-child:nth-child(odd) { grid-column: 1 / -1; }
 
-  #no-exercises {
+  #add-first {
     grid-column: 1 / -1;
     align-self: center;
-    color: var(--muted);
-    text-align: center;
+    min-height: 96px;
   }
 
   /* Settings screen */
@@ -396,6 +402,7 @@
   <h1>What's your nickname?</h1>
   <form id="nickname-form" class="setup-form">
     <input id="nickname-input" type="text" placeholder="e.g. Sam" aria-label="Nickname" maxlength="20" autocomplete="off">
+    <p id="nickname-hint" class="hint"></p>
     <div class="spacer"></div>
     <button id="nickname-done" class="primary" disabled>Continue</button>
   </form>
@@ -409,7 +416,7 @@
     <button class="row" style="--colour: var(--butter)" data-preset="1"><span>1<small>All body</small></span></button>
     <button class="row" style="--colour: var(--sky)" data-go="custom"><span>CUSTOM<small>Pick how many and name them</small></span></button>
   </div>
-  <button class="back" data-go="name" aria-label="Back">←</button>
+  <button id="picker-back" class="back" data-go="name" aria-label="Back">←</button>
 </main>
 
 <main id="custom-screen" class="screen" hidden>
@@ -433,6 +440,7 @@
 
 <main id="landing" class="screen" hidden>
   <p id="greeting"></p>
+  <p id="sync-status" class="hint" hidden></p>
   <div id="split-rows" class="row-list"></div>
 </main>
 
@@ -504,9 +512,10 @@
   };
 
   // What the popup inputs ask for (up to three). `whole` means no decimals.
+  // `blankIsZero` lets the box stay empty, and `zeroHint` is how a past 0 gets described.
   const STRENGTH_FIELDS = [
     { key: "reps", placeholder: "reps", unit: " reps", label: "Reps", min: 1, whole: true },
-    { key: "weight", placeholder: "weight", unit: " kg", label: "Weight in kg", min: 0 },
+    { key: "weight", placeholder: "weight", unit: " kg", label: "Weight in kg", min: 0, blankIsZero: true, zeroHint: "bodyweight" },
   ];
   const CARDIO_FIELDS = [
     { key: "incline", placeholder: "incline %", unit: "%", label: "Incline percent", min: 0 },
@@ -529,6 +538,13 @@
   //   sets: { "ROPE PUSHDOWN": [{ id, date: "2026-11-02", reps: 8, weight: 40 }] } }
   const STORAGE_KEY = "gymTracker.v2";
   const OLD_STORAGE_KEY = "gymTracker.v1";
+  const UNSYNCED_KEY = "gymTracker.v2.unsynced"; // set while the phone has changes not yet online
+
+  // Each person's data is one online record, found by their nickname. This key only
+  // identifies the project, so it's fine in public code. The database rules control access.
+  const PROFILES_URL = "https://firestore.googleapis.com/v1/projects/gymbuddy-84fce/databases/(default)/documents/users";
+  const API_KEY = "AIzaSyDuTO0RnC3kb_Ik1TcG0dj6L8qcv0sCoJA";
+  const SYNC_TIMEOUT_MS = 10000;
 
   function loadData() {
     const saved = localStorage.getItem(STORAGE_KEY);
@@ -576,12 +592,17 @@
     return Boolean(data.sets[name]) || data.splits.some((split) => split.exercises.includes(name));
   }
 
-  // Load, change, save. Returns false (and says so) if the save fails.
-  function updateData(change) {
+  // Load, change, save, then back it up online. Returns false (and says so) if the save fails.
+  // changesSetup marks edits to splits and exercises, so the newest version wins between phones.
+  function updateData(change, changesSetup = true) {
     try {
       const data = loadData();
       change(data);
+      if (changesSetup) data.changedAt = Date.now();
       saveData(data);
+      localWrites++;
+      localStorage.setItem(UNSYNCED_KEY, "1");
+      syncNow();
       return true;
     } catch {
       showToast("not saved");
@@ -589,9 +610,111 @@
     }
   }
 
+  // Online copy. Plain web requests, so the app doesn't need Firebase's code library.
+  function profileUrl(nickname) {
+    // The prefix avoids IDs the database reserves, and the encoding keeps "/" and friends safe.
+    const id = `u_${encodeURIComponent(cleanName(nickname))}`;
+    return `${PROFILES_URL}/${encodeURIComponent(id)}?key=${API_KEY}`;
+  }
+
+  // Returns the saved profile, or null if this nickname is new. Throws if it can't tell.
+  async function fetchProfile(nickname) {
+    const response = await fetch(profileUrl(nickname), { signal: AbortSignal.timeout(SYNC_TIMEOUT_MS) });
+    if (response.status === 404) return null;
+    if (!response.ok) throw new Error(`Load failed: ${response.status}`);
+    const record = await response.json();
+    const profile = JSON.parse(record.fields.data.stringValue);
+    if (!profile.nickname || !profile.sets || !Array.isArray(profile.cardio)) throw new Error("Bad profile");
+    return profile;
+  }
+
+  async function uploadProfile(data) {
+    const response = await fetch(profileUrl(data.nickname), {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ fields: { data: { stringValue: JSON.stringify(data) } } }),
+      signal: AbortSignal.timeout(SYNC_TIMEOUT_MS),
+    });
+    if (!response.ok) throw new Error(`Save failed: ${response.status}`);
+  }
+
+  // Combines two copies of a profile. Sets are never lost: every set from both copies is kept,
+  // matched by id. For splits and exercises, whichever copy was edited most recently wins.
+  function mergeData(local, remote) {
+    const remoteWins = !local.splits || (remote.splits && (remote.changedAt || 0) > (local.changedAt || 0));
+    const [winner, loser] = remoteWins ? [remote, local] : [local, remote];
+
+    const sets = {};
+    const seen = new Set();
+    for (const [name, list] of Object.entries(winner.sets)) {
+      sets[name] = [...list];
+      list.forEach((set) => seen.add(set.id));
+    }
+    for (const [name, list] of Object.entries(loser.sets)) {
+      const missing = list.filter((set) => !seen.has(set.id));
+      if (missing.length === 0) continue;
+      sets[name] = [...(sets[name] || []), ...missing]
+        .sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id));
+    }
+    return { ...winner, sets };
+  }
+
+  let localWrites = 0;
+  let syncing = false;
+  let syncAgain = false;
+
+  // Brings the phone and the online copy into line, then says if anything is still waiting.
+  async function syncNow() {
+    if (syncing) {
+      syncAgain = true;
+      return;
+    }
+    syncing = true;
+    try {
+      do {
+        syncAgain = false;
+        await syncOnce();
+      } while (syncAgain);
+    } catch {
+      // No signal or a bad response. The phone's copy is safe, and the next sync retries.
+    } finally {
+      syncing = false;
+      updateSyncStatus();
+    }
+  }
+
+  async function syncOnce() {
+    const writesBefore = localWrites;
+    const before = loadData();
+    if (!before.nickname || !before.splits) return; // nothing to back up until setup is finished
+
+    const remote = await fetchProfile(before.nickname);
+    const current = loadData(); // re-read: a set may have been logged during the wait
+    if (!current.splits) return;
+
+    const merged = remote ? mergeData(current, remote) : current;
+    const mergedJson = JSON.stringify(merged);
+    if (mergedJson !== JSON.stringify(current)) {
+      saveData(merged);
+      const popupOpen = logDialog.open || editor.open || splitEditor.open;
+      if (!popupOpen) showScreen();
+    }
+    if (!remote || mergedJson !== JSON.stringify(remote)) await uploadProfile(merged);
+    if (localWrites === writesBefore) localStorage.removeItem(UNSYNCED_KEY);
+  }
+
+  function updateSyncStatus() {
+    const waiting = Boolean(localStorage.getItem(UNSYNCED_KEY));
+    syncStatus.hidden = !waiting;
+    syncStatus.textContent = waiting ? "Saved on this phone. Will back up online when there's signal." : "";
+  }
+
   const screens = [...document.querySelectorAll(".screen")];
   const nicknameInput = document.getElementById("nickname-input");
   const nicknameDone = document.getElementById("nickname-done");
+  const nicknameHint = document.getElementById("nickname-hint");
+  const pickerBack = document.getElementById("picker-back");
+  const syncStatus = document.getElementById("sync-status");
   const customNames = document.getElementById("custom-names");
   const customDone = document.getElementById("custom-done");
   const countButtons = [...document.querySelectorAll("[data-count]")];
@@ -629,6 +752,7 @@
 
   function renderLanding(data) {
     document.getElementById("greeting").textContent = `Hi, ${data.nickname}!`;
+    updateSyncStatus();
     splitRows.replaceChildren(...data.splits.map((split, i) => {
       const row = document.createElement("button");
       row.className = "row";
@@ -650,10 +774,12 @@
     settingsLink.dataset.go = `${index}/settings`;
     bubbles.style.setProperty("--colour", splitColour(index));
     if (split.exercises.length === 0) {
-      const message = document.createElement("p");
-      message.id = "no-exercises";
-      message.textContent = "No exercises yet. Add some in settings.";
-      bubbles.replaceChildren(message);
+      const add = document.createElement("button");
+      add.id = "add-first";
+      add.className = "primary";
+      add.dataset.add = "";
+      add.textContent = "+ ADD EXERCISE";
+      bubbles.replaceChildren(add);
       return;
     }
     bubbles.replaceChildren(...split.exercises.map((name) => {
@@ -698,11 +824,16 @@
     editor.close();
     splitEditor.close();
 
-    if (!data.nickname || route === "name") {
+    // Once there are logged sets the nickname is locked in, so they can't land on someone else's profile.
+    const hasSets = Object.keys(data.sets).length > 0;
+
+    if (!data.nickname || (route === "name" && !hasSets && !data.splits)) {
       nicknameInput.value = data.nickname || "";
+      nicknameHint.textContent = NICKNAME_NOTE;
       updateNicknameDone();
       showOnly("nickname-screen");
     } else if (!data.splits) {
+      pickerBack.hidden = hasSets;
       showOnly(route === "custom" ? "custom-screen" : "picker-screen");
     } else if (split) {
       currentSplit = Number(splitRoute[1]);
@@ -723,6 +854,8 @@
     if (location.hash.slice(1) === route) showScreen();
     else location.hash = route;
   }
+
+  const NICKNAME_NOTE = "Your logs are saved online under this nickname, so you can get them back on any phone. There's no password, so anyone who types it can see them.";
 
   function updateNicknameDone() {
     nicknameDone.disabled = nicknameInput.value.trim() === "";
@@ -837,13 +970,19 @@
       const field = currentFields[i];
       input.hidden = !field;
       if (!field) return;
-      // Show the last logged value as the hint, or the field's name if there isn't one.
-      input.placeholder = field.key in lastSet ? `${lastSet[field.key]}${field.unit}` : field.placeholder;
+      input.placeholder = fieldHint(field, lastSet);
       input.setAttribute("aria-label", field.label);
       input.inputMode = field.whole ? "numeric" : "decimal";
     });
     updateTick();
     logDialog.showModal();
+  }
+
+  // The last logged value, or the field's name if there isn't one.
+  function fieldHint(field, lastSet) {
+    if (!(field.key in lastSet)) return field.placeholder;
+    if (lastSet[field.key] === 0 && field.zeroHint) return field.zeroHint;
+    return `${lastSet[field.key]}${field.unit}`;
   }
 
   // Local date, not UTC: toISOString() would put a morning east of UTC on yesterday.
@@ -857,7 +996,8 @@
   function isValidSet() {
     return currentFields.every((field, i) => {
       const value = logInputs[i].value;
-      return value !== "" && Number.isFinite(Number(value)) && Number(value) >= field.min;
+      if (value === "") return Boolean(field.blankIsZero);
+      return Number.isFinite(Number(value)) && Number(value) >= field.min;
     });
   }
 
@@ -876,7 +1016,7 @@
     const saved = updateData((data) => {
       data.sets[currentExercise] = data.sets[currentExercise] || [];
       data.sets[currentExercise].push(set);
-    });
+    }, false);
     if (saved) showToast("logged");
     logDialog.close();
   }
@@ -903,10 +1043,30 @@
 
   nicknameInput.addEventListener("input", updateNicknameDone);
 
-  document.getElementById("nickname-form").addEventListener("submit", (event) => {
+  // Checks online first, so a returning person gets their data back instead of a blank setup.
+  // Without signal it has to stop: starting fresh could replace a saved profile's setup.
+  document.getElementById("nickname-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     const nickname = nicknameInput.value.trim();
-    if (nickname && updateData((data) => { data.nickname = nickname; })) go("");
+    if (!nickname || nicknameDone.disabled) return;
+
+    nicknameDone.disabled = true;
+    nicknameDone.textContent = "Checking...";
+    let remote;
+    try {
+      remote = await fetchProfile(nickname);
+    } catch {
+      nicknameHint.textContent = "Couldn't connect. Check your signal and try again.";
+      return;
+    } finally {
+      nicknameDone.textContent = "Continue";
+      updateNicknameDone();
+    }
+
+    const saved = updateData((data) => {
+      Object.assign(data, remote ? mergeData(data, remote) : { nickname });
+    }, false);
+    if (saved) go("");
   });
 
   customNames.addEventListener("input", updateCustomDone);
@@ -982,8 +1142,13 @@
   }
 
   window.addEventListener("hashchange", showScreen);
+  window.addEventListener("online", syncNow);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") syncNow();
+  });
   try {
     showScreen();
+    syncNow();
   } catch {
     // Unreadable saved data: say so, and don't offer setup, which would overwrite it.
     document.body.textContent = "Couldn't read your saved data.";
