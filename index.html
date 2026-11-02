@@ -25,6 +25,7 @@
     --butter: #f8cb62;
     --sky: #b5ecfa;
     --sage: #bfd0c4;
+    --chart: #7b7bf7; /* the one palette colour that passes the chart contrast and lightness checks here */
     --title-font: "DIN Condensed", "Bahnschrift Condensed", "Roboto Condensed", "sans-serif-condensed", "Arial Narrow", sans-serif;
     --gap: 10px;
   }
@@ -269,6 +270,57 @@
 
   #add-first { margin: auto 0; min-height: 96px; }
 
+  /* Progress screen and charts */
+  .scroll-area {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: var(--gap);
+  }
+  .scroll-area > * { flex-shrink: 0; }
+  .chart-card {
+    padding: 16px;
+    background: var(--card);
+    border-radius: 28px;
+  }
+  .chart-card svg {
+    display: block;
+    width: 100%;
+    height: auto;
+    margin-top: 8px;
+    touch-action: pan-y; /* a finger can read values without blocking page scroll */
+  }
+  .chart-card svg text {
+    fill: var(--muted);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+  }
+  .chart-card svg text.end-label { fill: var(--text); font-weight: 600; }
+  .chart-title { color: var(--muted); font-size: 0.85rem; }
+  .hero-figure {
+    margin-top: 2px;
+    font-family: var(--title-font);
+    font-size: 3.25rem;
+    font-weight: 700;
+    line-height: 1;
+  }
+  .chart-readout {
+    min-height: 1.3em;
+    margin-top: 6px;
+    font-size: 0.85rem;
+  }
+  .chart-card details { margin-top: 10px; color: var(--muted); font-size: 0.85rem; }
+  .chart-card summary { padding: 8px 0; cursor: pointer; }
+  .chart-table { width: 100%; border-collapse: collapse; color: var(--text); font-variant-numeric: tabular-nums; }
+  .chart-table td { padding: 5px 0; border-top: 1px solid var(--line); }
+  .chart-table td:last-child { text-align: right; }
+  .metric-row { margin-top: 8px; }
+  .metric-row + .wide-pill, .chart-card .wide-pill { width: 100%; margin-top: 12px; background: var(--line); }
+  .delete-small { width: 36px; height: 36px; background: var(--line); }
+  #history-list { display: flex; flex-direction: column; gap: var(--gap); }
+
   /* Settings and history screens */
   .edit-list {
     display: flex;
@@ -460,8 +512,15 @@
   <p id="sync-status" class="hint" hidden></p>
   <div id="split-rows" class="row-list"></div>
   <div class="bottom-bar">
+    <button class="wide-pill" data-go="progress">PROGRESS</button>
     <button class="wide-pill" data-go="settings">SETTINGS</button>
   </div>
+</main>
+
+<main id="progress" class="screen" hidden>
+  <h1>Progress</h1>
+  <div id="progress-area" class="scroll-area"></div>
+  <button class="back" data-go="" aria-label="Back">←</button>
 </main>
 
 <main id="app-settings" class="screen" hidden>
@@ -505,7 +564,10 @@
 
 <main id="history" class="screen" hidden>
   <h1 id="history-title"></h1>
-  <div id="history-list" class="edit-list"></div>
+  <div class="scroll-area">
+    <div id="history-chart"></div>
+    <div id="history-list"></div>
+  </div>
   <button id="history-back" class="back" aria-label="Back">←</button>
 </main>
 
@@ -545,6 +607,15 @@
     <input id="new-nickname" type="text" placeholder="New nickname" aria-label="New nickname" maxlength="20" autocomplete="off">
     <p id="new-nickname-hint"></p>
     <button id="new-nickname-save" class="primary">SAVE</button>
+  </form>
+</dialog>
+
+<dialog id="body-editor" class="name-editor">
+  <form>
+    <input id="body-height" type="text" inputmode="decimal" placeholder="Height in cm" aria-label="Height in centimetres" autocomplete="off">
+    <input id="body-weight" type="text" inputmode="decimal" placeholder="Today's weight in kg" aria-label="Today's body weight in kilograms" autocomplete="off">
+    <p>Both optional. Weight is saved against today.</p>
+    <button id="body-save" class="primary">SAVE</button>
   </form>
 </dialog>
 
@@ -794,6 +865,16 @@
 
     const merged = { ...winner, sets };
     if (deleted.length > 0) merged.deleted = deleted;
+
+    // Body weights merge the same way as sets.
+    const weighIns = new Map();
+    for (const entry of [...(local.body || []), ...(remote.body || [])]) {
+      const known = weighIns.get(entry.id);
+      if (!deleted.includes(entry.id) && (!known || (entry.editedAt || 0) > (known.editedAt || 0))) weighIns.set(entry.id, entry);
+    }
+    if (weighIns.size > 0 || winner.body) {
+      merged.body = [...weighIns.values()].sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id));
+    }
     return merged;
   }
 
@@ -836,7 +917,7 @@
     const mergedJson = JSON.stringify(merged);
     if (mergedJson !== JSON.stringify(current)) {
       saveData(merged);
-      const popupOpen = logDialog.open || editor.open || splitEditor.open || nicknameEditor.open;
+      const popupOpen = logDialog.open || editor.open || splitEditor.open || nicknameEditor.open || bodyEditor.open;
       if (!popupOpen) showScreen();
     }
     if (!remote || mergedJson !== JSON.stringify(remote)) await uploadProfile(merged);
@@ -896,6 +977,12 @@
   const addSplit = document.getElementById("add-split");
   const orderButtons = [...document.querySelectorAll("[data-order]")];
   const historyList = document.getElementById("history-list");
+  const historyChart = document.getElementById("history-chart");
+  const progressArea = document.getElementById("progress-area");
+  const bodyEditor = document.getElementById("body-editor");
+  const bodyHeight = document.getElementById("body-height");
+  const bodyWeight = document.getElementById("body-weight");
+  const bodySave = document.getElementById("body-save");
   const logHistory = document.getElementById("log-history");
   const logDelete = document.getElementById("log-delete");
   const logDialog = document.getElementById("log");
@@ -1036,11 +1123,13 @@
     }));
   }
 
-  // Newest first. Strength exercises mark the heaviest set, with reps as the tie-break.
+  // Newest first, except that strength exercises pin the heaviest set to the top, with reps as
+  // the tie-break.
   function renderHistory(data, name, index) {
     document.getElementById("history-title").textContent = name;
     document.getElementById("history-back").dataset.go = index;
     const sets = data.sets[name] || [];
+    historyChart.replaceChildren(...exerciseChart(sets));
     const strength = sets.filter((set) => "reps" in set);
     const best = strength.length > 1
       ? strength.reduce((top, set) => (set.weight > top.weight || (set.weight === top.weight && set.reps > top.reps) ? set : top))
@@ -1053,7 +1142,9 @@
       historyList.replaceChildren(message);
       return;
     }
-    historyList.replaceChildren(...[...sets].reverse().map((set) => {
+    const newestFirst = [...sets].reverse();
+    const ordered = best ? [best, ...newestFirst.filter((set) => set !== best)] : newestFirst;
+    historyList.replaceChildren(...ordered.map((set) => {
       const row = document.createElement("button");
       row.className = "edit-row";
       row.dataset.editSet = set.id;
@@ -1071,6 +1162,270 @@
       }
       return row;
     }));
+  }
+
+  // Charts: hand-built SVG, so there's no library to download at the gym. One colour per chart,
+  // since each shows one thing. Tapping or dragging on a chart reads off that day's value.
+  const CHART = { width: 340, height: 170, left: 40, right: 14, top: 18, bottom: 22 };
+  const VOLUME_DAYS = 28;
+
+  function svgElement(tag, attributes = {}) {
+    const element = document.createElementNS("http://www.w3.org/2000/svg", tag);
+    for (const [name, value] of Object.entries(attributes)) element.setAttribute(name, value);
+    return element;
+  }
+
+  function roundUp(value) {
+    if (value <= 0) return 1;
+    const size = 10 ** Math.floor(Math.log10(value));
+    return [1, 2, 2.5, 5, 10].find((step) => step * size >= value) * size;
+  }
+
+  function axisNumber(value) {
+    return value >= 10000 ? `${value / 1000}K` : value.toLocaleString();
+  }
+
+  function dayNumber(date) {
+    const [year, month, day] = date.split("-").map(Number);
+    return Date.UTC(year, month - 1, day) / 86400000;
+  }
+
+  function shortDate(date) {
+    const [year, month, day] = date.split("-").map(Number);
+    return new Date(year, month - 1, day).toLocaleDateString(undefined, { day: "numeric", month: "short" });
+  }
+
+  // The empty frame: hairline gridlines, value ticks and first and last dates.
+  function chartFrame(ticks, toY, firstDate, lastDate, description) {
+    const svg = svgElement("svg", { viewBox: `0 0 ${CHART.width} ${CHART.height}`, role: "img", "aria-label": description });
+    for (const tick of ticks) {
+      const y = toY(tick);
+      svg.append(svgElement("line", { x1: CHART.left, x2: CHART.width - CHART.right, y1: y, y2: y, stroke: "var(--line)", "stroke-width": 1 }));
+      const label = svgElement("text", { x: CHART.left - 6, y: y + 4, "text-anchor": "end" });
+      label.textContent = axisNumber(tick);
+      svg.append(label);
+    }
+    const dateY = CHART.height - 6;
+    const first = svgElement("text", { x: CHART.left, y: dateY });
+    first.textContent = shortDate(firstDate);
+    const last = svgElement("text", { x: CHART.width - CHART.right, y: dateY, "text-anchor": "end" });
+    last.textContent = shortDate(lastDate);
+    svg.append(first, last);
+    return svg;
+  }
+
+  // Reads off the nearest day under a finger or cursor, and marks it with a thin line.
+  function addReadout(svg, readout, points, describe) {
+    const marker = svgElement("line", { y1: CHART.top, y2: CHART.height - CHART.bottom, stroke: "var(--muted)", "stroke-width": 1, visibility: "hidden" });
+    svg.append(marker);
+    const read = (event) => {
+      const box = svg.getBoundingClientRect();
+      const x = ((event.clientX - box.left) / box.width) * CHART.width;
+      const nearest = points.reduce((best, point) => (Math.abs(point.x - x) < Math.abs(best.x - x) ? point : best));
+      marker.setAttribute("x1", nearest.x);
+      marker.setAttribute("x2", nearest.x);
+      marker.setAttribute("visibility", "visible");
+      readout.textContent = describe(nearest);
+    };
+    svg.addEventListener("pointerdown", read);
+    svg.addEventListener("pointermove", read);
+  }
+
+  function chartReadout(text) {
+    const readout = document.createElement("p");
+    readout.className = "chart-readout";
+    readout.textContent = text;
+    return readout;
+  }
+
+  // Every value also available as plain rows, so nothing depends on reading the chart.
+  function chartTable(rows) {
+    const details = document.createElement("details");
+    const summary = document.createElement("summary");
+    summary.textContent = "Show numbers";
+    const table = document.createElement("table");
+    table.className = "chart-table";
+    for (const cells of rows) {
+      const row = table.insertRow();
+      for (const cell of cells) {
+        const td = row.insertCell();
+        if (cell instanceof Node) td.append(cell);
+        else td.textContent = cell;
+      }
+    }
+    details.append(summary, table);
+    return details;
+  }
+
+  // A value over time. The axis fits the data rather than starting at 0, so small gains show.
+  function lineChart(entries, unit, card) {
+    const values = entries.map((entry) => entry.value);
+    const low = Math.min(...values);
+    const high = Math.max(...values);
+    const step = roundUp((high - low) / 2 || Math.max(low / 10, 1));
+    const bottom = Math.floor(low / step) * step;
+    const top = Math.max(Math.ceil(high / step) * step, bottom + step);
+    const ticks = [];
+    for (let tick = bottom; tick <= top + step / 2; tick += step) ticks.push(tick);
+
+    const firstDay = dayNumber(entries[0].date);
+    const span = dayNumber(entries[entries.length - 1].date) - firstDay || 1;
+    const plotWidth = CHART.width - CHART.left - CHART.right;
+    const toX = (date) => CHART.left + ((dayNumber(date) - firstDay) / span) * plotWidth;
+    const toY = (value) => CHART.height - CHART.bottom - ((value - bottom) / (top - bottom)) * (CHART.height - CHART.top - CHART.bottom);
+
+    const latest = entries[entries.length - 1];
+    const description = `From ${values[0]}${unit} on ${shortDate(entries[0].date)} to ${latest.value}${unit} on ${shortDate(latest.date)}`;
+    const svg = chartFrame(ticks, toY, entries[0].date, latest.date, description);
+    const points = entries.map((entry) => ({ ...entry, x: toX(entry.date), y: toY(entry.value) }));
+    svg.append(svgElement("polyline", {
+      points: points.map((point) => `${point.x},${point.y}`).join(" "),
+      fill: "none",
+      stroke: "var(--chart)",
+      "stroke-width": 2,
+      "stroke-linecap": "round",
+      "stroke-linejoin": "round",
+    }));
+    const end = points[points.length - 1];
+    svg.append(svgElement("circle", { cx: end.x, cy: end.y, r: 5, fill: "var(--chart)", stroke: "var(--card)", "stroke-width": 2 }));
+    const endLabel = svgElement("text", { class: "end-label", x: end.x, y: Math.max(end.y - 10, 11), "text-anchor": "end" });
+    endLabel.textContent = `${latest.value}${unit}`;
+    svg.append(endLabel);
+
+    const describePoint = (point) => `${formatDate(point.date)}: ${point.value}${unit}`;
+    const readout = chartReadout(describePoint(end));
+    addReadout(svg, readout, points, describePoint);
+    card.append(svg, readout);
+  }
+
+  function chartCard(title) {
+    const card = document.createElement("div");
+    card.className = "chart-card";
+    const heading = document.createElement("p");
+    heading.className = "chart-title";
+    heading.textContent = title;
+    card.append(heading);
+    return card;
+  }
+
+  // The number that best shows progress: distance for cardio, the heaviest set for
+  // strength, or the most reps if it's all bodyweight. Needs two different days to draw a line.
+  function exerciseChart(sets) {
+    const byDay = new Map();
+    const usable = sets.filter((set) => "reps" in set || ("speed" in set && "minutes" in set));
+    const isCardio = usable.some((set) => "speed" in set);
+    const usesWeight = usable.some((set) => set.weight > 0);
+    const title = isCardio ? "Distance per day" : usesWeight ? "Heaviest set per day" : "Most reps per day";
+    const unit = isCardio ? " km" : usesWeight ? " kg" : " reps";
+    for (const set of usable) {
+      if (isCardio !== "speed" in set) continue;
+      if (isCardio) byDay.set(set.date, Math.round(((byDay.get(set.date) || 0) + (set.speed * set.minutes) / 60) * 10) / 10);
+      else byDay.set(set.date, Math.max(byDay.get(set.date) || 0, usesWeight ? set.weight : set.reps));
+    }
+    const entries = [...byDay].map(([date, value]) => ({ date, value })).sort((a, b) => a.date.localeCompare(b.date));
+    if (entries.length < 2) return [];
+    const card = chartCard(title);
+    lineChart(entries, unit, card);
+    return [card];
+  }
+
+  // Kilograms moved each day: reps x weight. Cardio and bodyweight sets have no weight to count.
+  function dailyVolume(data) {
+    const volume = new Map();
+    for (const set of Object.values(data.sets).flat()) {
+      if (set.reps && set.weight) volume.set(set.date, (volume.get(set.date) || 0) + set.reps * set.weight);
+    }
+    return volume;
+  }
+
+  function volumeCard(data) {
+    const volume = dailyVolume(data);
+    const card = chartCard("Moved today");
+    const hero = document.createElement("p");
+    hero.className = "hero-figure";
+    hero.textContent = `${Math.round(volume.get(todayLocal()) || 0).toLocaleString()} kg`;
+    card.append(hero);
+
+    if (volume.size === 0) {
+      const empty = document.createElement("p");
+      empty.className = "chart-readout";
+      empty.textContent = "Log a set with a weight to start your chart.";
+      card.append(empty);
+      return card;
+    }
+
+    const now = new Date();
+    const days = Array.from({ length: VOLUME_DAYS }, (_, i) => {
+      const date = localDate(new Date(now.getFullYear(), now.getMonth(), now.getDate() - (VOLUME_DAYS - 1 - i)));
+      return { date, value: Math.round(volume.get(date) || 0) };
+    });
+    const top = roundUp(Math.max(...days.map((day) => day.value), 1));
+    const baseline = CHART.height - CHART.bottom;
+    const toY = (value) => baseline - (value / top) * (baseline - CHART.top);
+    const activeDays = days.filter((day) => day.value > 0).length;
+    const svg = chartFrame([0, top / 2, top], toY, days[0].date, days[days.length - 1].date, `Kilograms moved per day, last ${VOLUME_DAYS} days. ${activeDays} days with lifting.`);
+
+    const slot = (CHART.width - CHART.left - CHART.right) / VOLUME_DAYS;
+    const barWidth = Math.min(slot - 2, 24);
+    const radius = Math.min(4, barWidth / 2);
+    const points = days.map((day, i) => {
+      const x = CHART.left + slot * i + slot / 2;
+      if (day.value > 0) {
+        const y = toY(day.value);
+        const left = x - barWidth / 2;
+        const right = x + barWidth / 2;
+        const r = Math.min(radius, baseline - y);
+        svg.append(svgElement("path", {
+          d: `M${left},${baseline} V${y + r} Q${left},${y} ${left + r},${y} H${right - r} Q${right},${y} ${right},${y + r} V${baseline} Z`,
+          fill: "var(--chart)",
+        }));
+      }
+      return { ...day, x };
+    });
+
+    const describeDay = (day) => `${formatDate(day.date)}: ${day.value.toLocaleString()} kg`;
+    const readout = chartReadout(`Last ${VOLUME_DAYS} days. Tap a day. Weighted sets only.`);
+    addReadout(svg, readout, points, describeDay);
+    const rows = days.filter((day) => day.value > 0).reverse().map((day) => [formatDate(day.date), `${day.value.toLocaleString()} kg`]);
+    card.append(svg, readout, chartTable(rows));
+    return card;
+  }
+
+  function bodyCard(data) {
+    const entries = data.body || [];
+    const card = chartCard("Your body (optional)");
+    const latest = entries[entries.length - 1];
+    const summary = document.createElement("p");
+    summary.className = "metric-row";
+    const parts = [];
+    if (data.height) parts.push(`${data.height} cm`);
+    if (latest) parts.push(`${latest.weight} kg`);
+    summary.textContent = parts.length ? parts.join(" · ") : "Add your height and weight to track them here.";
+    card.append(summary);
+
+    const weighIns = new Map(entries.map((entry) => [entry.date, entry])); // the latest per day
+    const series = [...weighIns.values()].map((entry) => ({ date: entry.date, value: entry.weight }));
+    if (series.length >= 2) lineChart(series, " kg", card);
+    if (entries.length > 0) {
+      card.append(chartTable([...entries].reverse().map((entry) => {
+        const remove = document.createElement("button");
+        remove.className = "move delete delete-small";
+        remove.textContent = "✕";
+        remove.setAttribute("aria-label", `Delete weight from ${formatDate(entry.date)}`);
+        remove.dataset.deleteBody = entry.id;
+        return [formatDate(entry.date), `${entry.weight} kg`, remove];
+      })));
+    }
+    const update = document.createElement("button");
+    update.className = "wide-pill";
+    update.dataset.editBody = "";
+    update.textContent = parts.length ? "UPDATE" : "ADD";
+    card.append(update);
+    return card;
+  }
+
+  function renderProgress(data) {
+    progressArea.replaceChildren(volumeCard(data), bodyCard(data));
   }
 
   function describeSet(set) {
@@ -1099,6 +1454,7 @@
     editor.close();
     splitEditor.close();
     nicknameEditor.close();
+    bodyEditor.close();
 
     // Once there are logged sets the nickname is locked in, so they can't land on someone else's profile.
     const hasSets = Object.keys(data.sets).length > 0;
@@ -1132,6 +1488,9 @@
     } else if (route === "settings") {
       renderAppSettings(data);
       showOnly("app-settings");
+    } else if (route === "progress") {
+      renderProgress(data);
+      showOnly("progress");
     } else {
       renderLanding(data);
       showOnly("landing");
@@ -1388,11 +1747,14 @@
   }
 
   // Local date, not UTC: toISOString() would put a morning east of UTC on yesterday.
+  function localDate(date) {
+    const month = String(date.getMonth() + 1).padStart(2, "0");
+    const day = String(date.getDate()).padStart(2, "0");
+    return `${date.getFullYear()}-${month}-${day}`;
+  }
+
   function todayLocal() {
-    const now = new Date();
-    const month = String(now.getMonth() + 1).padStart(2, "0");
-    const day = String(now.getDate()).padStart(2, "0");
-    return `${now.getFullYear()}-${month}-${day}`;
+    return localDate(new Date());
   }
 
   function isValidSet() {
@@ -1466,6 +1828,8 @@
     if (button.dataset.add !== undefined) openEditor(null);
     if (button.dataset.type) setEditorType(button.dataset.type);
     if (button.dataset.move) moveItem(button.dataset.scope, Number(button.dataset.index), Number(button.dataset.move));
+    if (button.dataset.editBody !== undefined) openBodyEditor();
+    if (button.dataset.deleteBody) deleteWeighIn(button.dataset.deleteBody);
     if (button.dataset.editSplit) openSplitEditor(Number(button.dataset.editSplit));
     if (button.dataset.deleteExercise) deleteExercise(button.dataset.deleteExercise);
     if (button.dataset.deleteSplit) deleteSplit(Number(button.dataset.deleteSplit));
@@ -1570,6 +1934,73 @@
 
   logDelete.addEventListener("click", deleteEditingSet);
 
+  function decimalsOnly(text) {
+    const [whole, ...decimals] = text
+      .replace(/,/g, ".") // some phone keypads offer a comma as the decimal key
+      .replace(/[^\d.]/g, "")
+      .split(".");
+    return decimals.length ? `${whole}.${decimals.join("")}` : whole;
+  }
+
+  function openBodyEditor() {
+    const data = loadData();
+    const today = (data.body || []).find((entry) => entry.date === todayLocal());
+    bodyHeight.value = data.height || "";
+    bodyWeight.value = today ? today.weight : "";
+    updateBodySave();
+    bodyEditor.showModal();
+  }
+
+  // A blank height clears it. A blank weight just means no weigh-in today.
+  function bodyFieldOk(input) {
+    return input.value === "" || Number(input.value) > 0;
+  }
+
+  function updateBodySave() {
+    bodySave.disabled = !bodyFieldOk(bodyHeight) || !bodyFieldOk(bodyWeight);
+  }
+
+  for (const input of [bodyHeight, bodyWeight]) {
+    input.addEventListener("input", () => {
+      input.value = decimalsOnly(input.value);
+      updateBodySave();
+    });
+  }
+
+  bodyEditor.querySelector("form").addEventListener("submit", (event) => {
+    event.preventDefault();
+    if (bodySave.disabled) return;
+    const height = Number(bodyHeight.value);
+    const weight = Number(bodyWeight.value);
+    const saved = updateData((data) => {
+      if (height) data.height = height;
+      else delete data.height;
+      data.changedAt = Date.now();
+      if (!weight) return;
+      data.body = data.body || [];
+      const today = data.body.find((entry) => entry.date === todayLocal());
+      if (today) {
+        today.weight = weight;
+        today.editedAt = Date.now();
+      } else {
+        data.body.push({ id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`, date: todayLocal(), weight });
+      }
+    }, false);
+    if (saved) {
+      showToast("saved");
+      showScreen();
+    }
+  });
+
+  function deleteWeighIn(id) {
+    if (!confirm("Delete this weight? This can't be undone.")) return;
+    const saved = updateData((data) => {
+      data.body = data.body.filter((entry) => entry.id !== id);
+      data.deleted = [...(data.deleted || []), id].sort();
+    }, false);
+    if (saved) showScreen();
+  }
+
   // Filter as you type, because inputmode only picks the keypad: a laptop keyboard
   // or a paste could still put letters in.
   logInputs.forEach((input, i) => {
@@ -1577,11 +2008,7 @@
       if (currentFields[i].whole) {
         input.value = input.value.replace(/\D/g, "");
       } else {
-        const [whole, ...decimals] = input.value
-          .replace(/,/g, ".") // some phone keypads offer a comma as the decimal key
-          .replace(/[^\d.]/g, "")
-          .split(".");
-        input.value = decimals.length ? `${whole}.${decimals.join("")}` : whole;
+        input.value = decimalsOnly(input.value);
       }
       updateTick();
     });
@@ -1593,7 +2020,7 @@
   });
 
   // Tapping outside a popup closes it without saving.
-  for (const dialog of [logDialog, editor, splitEditor, nicknameEditor]) {
+  for (const dialog of [logDialog, editor, splitEditor, nicknameEditor, bodyEditor]) {
     dialog.addEventListener("click", (event) => {
       if (event.target === dialog) dialog.close();
     });
