@@ -675,7 +675,8 @@
   const PUSH = ["Chest press machine", "Incline chest press machine", "Pec fly machine", "Shoulder press machine", "Lateral raise with free-weights", "Rope pushdown"];
   const PULL = ["Fixed lat pulldown machine", "Seated cable row", "Reverse fly", "Bicep curl machine", "Hammer curl"];
   const LEGS = ["Leg press", "Leg extension", "Hip abduction machine", "Hip adduction machine", "Hip thrust or glute machine", "Dumbbell Romanian deadlift", "Leg curls", "Calf raise machine"];
-  const FINISHERS = ["Ab crunch machine", "Treadmill incline walk"]; // end every split
+  const TREADMILL = "Treadmill incline walk";
+  const FINISHERS = ["Ab crunch machine", TREADMILL]; // end every split
 
   const SPLIT_PRESETS = {
     3: [["Push", PUSH], ["Pull", PULL], ["Legs", LEGS]],
@@ -730,7 +731,7 @@
 
   // Carries v1 sets into the new shape. The v1 copy stays put as a backup.
   function migrateOldData() {
-    const data = { nickname: null, splits: null, cardio: [cleanName("Treadmill incline walk")], sets: {} };
+    const data = { nickname: null, splits: null, cardio: [cleanName(TREADMILL)], sets: {} };
     const old = localStorage.getItem(OLD_STORAGE_KEY);
     if (old) {
       for (const { category, exercise, ...set } of JSON.parse(old).entries) {
@@ -930,6 +931,9 @@
   let localWrites = 0;
   let syncing = false;
   let syncAgain = false;
+  let lastSyncError = null;
+  let syncRetryTimer;
+  const SYNC_RETRY_MS = 60000;
 
   // Brings the phone and the online copy into line, then says if anything is still waiting.
   async function syncNow() {
@@ -943,12 +947,23 @@
         syncAgain = false;
         await syncOnce();
       } while (syncAgain);
-    } catch {
-      // No signal or a bad response. The phone's copy is safe, and the next sync retries.
+      lastSyncError = null;
+    } catch (error) {
+      lastSyncError = error; // the phone's copy is safe, and a retry is scheduled below
     } finally {
       syncing = false;
       updateSyncStatus();
+      scheduleSyncRetry();
     }
+  }
+
+  // Keeps trying while changes are waiting. Coming back to the app also syncs, so it can skip hidden.
+  function scheduleSyncRetry() {
+    clearTimeout(syncRetryTimer);
+    if (!lastSyncError || !localStorage.getItem(UNSYNCED_KEY)) return;
+    syncRetryTimer = setTimeout(() => {
+      if (document.visibilityState === "visible") syncNow();
+    }, SYNC_RETRY_MS);
   }
 
   async function syncOnce() {
@@ -966,8 +981,7 @@
     const mergedJson = JSON.stringify(merged);
     if (mergedJson !== JSON.stringify(current)) {
       saveData(merged);
-      const popupOpen = logDialog.open || editor.open || splitEditor.open || nicknameEditor.open || bodyEditor.open || purgeEditor.open;
-      if (!popupOpen) showScreen();
+      if (!popupOpen()) showScreen();
     }
     if (!remote || mergedJson !== JSON.stringify(remote)) await uploadProfile(merged);
     if (localWrites === writesBefore) localStorage.removeItem(UNSYNCED_KEY);
@@ -986,10 +1000,26 @@
     return userId;
   }
 
+  // Only speaks up after an upload has actually failed, not while a normal one is under way.
   function updateSyncStatus() {
-    const waiting = Boolean(localStorage.getItem(UNSYNCED_KEY));
-    syncStatus.hidden = !waiting;
-    syncStatus.textContent = waiting ? "Saved on this phone. Will back up online when there's signal." : "";
+    const failed = Boolean(lastSyncError && localStorage.getItem(UNSYNCED_KEY));
+    syncStatus.hidden = !failed;
+    if (!failed) {
+      syncStatus.textContent = "";
+    } else if (isConnectionError(lastSyncError)) {
+      syncStatus.textContent = "Saved on this phone. Will back up online when there's signal.";
+    } else {
+      syncStatus.textContent = "Saved on this phone, but the online backup isn't working. It'll keep trying.";
+    }
+  }
+
+  // No signal or a timeout, as opposed to the server answering with a problem.
+  function isConnectionError(error) {
+    return error instanceof TypeError || error.name === "AbortError" || error.name === "TimeoutError";
+  }
+
+  function popupOpen() {
+    return [logDialog, editor, splitEditor, nicknameEditor, bodyEditor, purgeEditor].some((dialog) => dialog.open);
   }
 
   const screens = [...document.querySelectorAll(".screen")];
@@ -1054,8 +1084,16 @@
   let editorType = "strength";
   let toastTimer;
 
+  const SCROLLING_LISTS = ".scroll-area, .edit-list, #bubbles, #custom-names";
+  const lastRouteOnScreen = {};
+
+  // Screens are reused, so a list would otherwise keep the scroll position of whatever it last
+  // showed. Starts at the top for new content, but keeps your place when you come back to the same one.
   function showOnly(id) {
     screens.forEach((screen) => { screen.hidden = screen.id !== id; });
+    if (lastRouteOnScreen[id] === location.hash) return;
+    lastRouteOnScreen[id] = location.hash;
+    document.getElementById(id).querySelectorAll(SCROLLING_LISTS).forEach((list) => { list.scrollTop = 0; });
   }
 
   function renderLanding(data) {
@@ -1937,7 +1975,12 @@
     if (!names) return;
     if (loadData().splits && !confirm("Replace your splits? Exercise lists reset, but logged sets are kept.")) return;
     const splits = names.map((name) => ({ name, exercises: startingExercises(name, names.length) }));
-    if (updateData((data) => { data.splits = splits; })) go("");
+    const saved = updateData((data) => {
+      data.splits = splits;
+      // Starting exercises come with their type, even if an earlier treadmill was renamed.
+      if (splits.some((split) => split.exercises.includes(cleanName(TREADMILL)))) setExerciseType(data, cleanName(TREADMILL), "cardio");
+    });
+    if (saved) go("");
   });
 
   editorName.addEventListener("input", updateEditor);
@@ -2223,15 +2266,42 @@
 
   trackKeypad();
 
+  // sw.js says when it has downloaded a new version. Reloading is instant and data is already
+  // saved, so it only waits until nobody is typing into a popup or a setup screen.
+  let updateWaiting = false;
+
+  function applyUpdateIfSafe() {
+    const inSetup = !document.getElementById("setup-screen").hidden || !document.getElementById("nickname-screen").hidden;
+    if (updateWaiting && !popupOpen() && !inSetup) location.reload();
+  }
+
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.addEventListener("message", (event) => {
+      if (event.data !== "app-updated") return;
+      updateWaiting = true;
+      applyUpdateIfSafe();
+    });
+    if (navigator.serviceWorker.controller) navigator.serviceWorker.controller.postMessage("app-ready");
+  }
+
+  // An app left in the background resumes without loading anything, so ask for a fresh copy here too.
+  function checkForUpdate() {
+    if (navigator.serviceWorker && navigator.serviceWorker.controller) fetch("./").catch(() => {});
+  }
+
   window.addEventListener("hashchange", () => {
     reordering = false;
     showScreen();
+    applyUpdateIfSafe();
   });
   window.addEventListener("online", syncNow);
   // Not available when opened as a file or over plain http, which is fine for local testing.
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible") syncNow();
+    if (document.visibilityState !== "visible") return;
+    syncNow();
+    checkForUpdate();
+    applyUpdateIfSafe();
   });
   try {
     showScreen();
