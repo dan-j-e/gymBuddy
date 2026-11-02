@@ -287,6 +287,7 @@
     font-size: 1.15rem;
   }
   .move:disabled { color: var(--line); cursor: default; filter: none; transform: none; }
+  .delete { color: var(--coral); }
   .section-label { padding: 6px 8px 0; }
   #nickname-row { flex: 0 0 auto; }
 
@@ -408,7 +409,6 @@
     line-height: 1.3;
   }
   .name-editor .primary:disabled { background: var(--line); }
-  #editor-remove, #split-remove { color: var(--coral); }
 
   #toast {
     position: fixed;
@@ -526,7 +526,6 @@
     </div>
     <p id="editor-hint"></p>
     <button id="editor-save" class="primary">SAVE</button>
-    <button id="editor-remove" type="button" class="quiet">Remove from this split</button>
   </form>
 </dialog>
 
@@ -535,7 +534,6 @@
     <input id="split-name" type="text" placeholder="Split name" aria-label="Split name" maxlength="20" autocomplete="off">
     <p id="split-hint"></p>
     <button id="split-save" class="primary">SAVE</button>
-    <button id="split-remove" type="button" class="quiet">Remove this split</button>
   </form>
 </dialog>
 
@@ -591,9 +589,10 @@
   const OLD_STORAGE_KEY = "gymTracker.v1";
   const UNSYNCED_KEY = "gymTracker.v2.unsynced"; // set while the phone has changes not yet online
 
-  // Each person's data is one online record, found by their nickname. This key only
-  // identifies the project, so it's fine in public code. The database rules control access.
-  const PROFILES_URL = "https://firestore.googleapis.com/v1/projects/gymbuddy-84fce/databases/(default)/documents/users";
+  // Each person's data is one online record under a hidden ID, so their name is just a label.
+  // A second small record maps each nickname to that ID, which is how they get back in after a wipe.
+  // This key only identifies the project, so it's fine in public code. The database rules control access.
+  const DATABASE_URL = "https://firestore.googleapis.com/v1/projects/gymbuddy-84fce/databases/(default)/documents";
   const API_KEY = "AIzaSyDuTO0RnC3kb_Ik1TcG0dj6L8qcv0sCoJA";
   const SYNC_TIMEOUT_MS = 10000;
 
@@ -643,6 +642,12 @@
     return Boolean(data.sets[name]) || data.splits.some((split) => split.exercises.includes(name));
   }
 
+  function newUserId() {
+    // Not crypto.randomUUID(): browsers only allow it on https, which would break phone testing.
+    const bytes = crypto.getRandomValues(new Uint8Array(16));
+    return `p_${[...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+  }
+
   // Load, change, save, then back it up online. Returns false (and says so) if the save fails.
   // changesSetup marks edits to splits and exercises, so the newest version wins between phones.
   function updateData(change, changesSetup = true) {
@@ -662,33 +667,95 @@
   }
 
   // Online copy. Plain web requests, so the app doesn't need Firebase's code library.
-  function profileUrl(nickname) {
-    // The prefix avoids IDs the database reserves, and the encoding keeps "/" and friends safe.
-    const id = `u_${encodeURIComponent(cleanName(nickname))}`;
-    return `${PROFILES_URL}/${encodeURIComponent(id)}?key=${API_KEY}`;
+  function recordUrl(collection, id) {
+    return `${DATABASE_URL}/${collection}/${encodeURIComponent(id)}?key=${API_KEY}`;
   }
 
-  // Returns the saved profile, or null if this nickname is new. Throws if it can't tell.
-  // A renamed profile leaves a pointer under its old name, which gets followed here.
-  async function fetchProfile(nickname, hopsLeft = 5) {
-    const response = await fetch(profileUrl(nickname), { signal: AbortSignal.timeout(SYNC_TIMEOUT_MS) });
+  // The prefixes avoid IDs the database reserves, and the encoding keeps "/" and friends safe.
+  function nicknameId(nickname) {
+    return `n_${encodeURIComponent(cleanName(nickname))}`;
+  }
+
+  // Returns a record's fields, or null if it doesn't exist. Throws if it can't tell.
+  async function fetchRecord(collection, id) {
+    const response = await fetch(recordUrl(collection, id), { signal: AbortSignal.timeout(SYNC_TIMEOUT_MS) });
     if (response.status === 404) return null;
     if (!response.ok) throw new Error(`Load failed: ${response.status}`);
-    const record = await response.json();
-    const profile = JSON.parse(record.fields.data.stringValue);
-    if (profile.movedTo && hopsLeft > 0) return fetchProfile(profile.movedTo, hopsLeft - 1);
+    return (await response.json()).fields;
+  }
+
+  function writeRecord(collection, id, fields) {
+    return fetch(recordUrl(collection, id), {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ fields }),
+      signal: AbortSignal.timeout(SYNC_TIMEOUT_MS),
+    });
+  }
+
+  async function fetchProfile(userId) {
+    const fields = await fetchRecord("users", userId);
+    if (!fields) return null;
+    const profile = JSON.parse(fields.data.stringValue);
     if (!profile.nickname || !profile.sets || !Array.isArray(profile.cardio)) throw new Error("Bad profile");
     return profile;
   }
 
-  async function uploadProfile(data, nickname = data.nickname) {
-    const response = await fetch(profileUrl(nickname), {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ fields: { data: { stringValue: JSON.stringify(data) } } }),
-      signal: AbortSignal.timeout(SYNC_TIMEOUT_MS),
-    });
+  async function uploadProfile(data, userId = data.userId) {
+    const response = await writeRecord("users", userId, { data: { stringValue: JSON.stringify(data) } });
     if (!response.ok) throw new Error(`Save failed: ${response.status}`);
+  }
+
+  async function lookUpNickname(nickname) {
+    const fields = await fetchRecord("nicknames", nicknameId(nickname));
+    return fields ? fields.userId.stringValue : null;
+  }
+
+  // Points a name at an ID. The rules only allow creating these, so a name can never be taken
+  // from its owner. Returns the ID the name ends up with, which may be someone else's.
+  async function claimNickname(nickname, userId) {
+    const owner = await lookUpNickname(nickname);
+    if (owner) return owner;
+    const response = await writeRecord("nicknames", nicknameId(nickname), { userId: { stringValue: userId } });
+    if (response.ok) return userId;
+    const newOwner = await lookUpNickname(nickname);
+    if (!newOwner) throw new Error(`Claim failed: ${response.status}`);
+    return newOwner;
+  }
+
+  // Profiles made before hidden IDs live at users/u_NAME, and renamed ones left a pointer.
+  // Returns { profile } if there's one still to convert, { userId } if it's been converted
+  // already, or null if the name was never used.
+  async function findOldProfile(nickname, hopsLeft = 5) {
+    const fields = await fetchRecord("users", `u_${encodeURIComponent(cleanName(nickname))}`);
+    if (!fields) return null;
+    const record = JSON.parse(fields.data.stringValue);
+    if (record.movedToId) return { userId: record.movedToId };
+    if (record.movedTo && hopsLeft > 0) return findOldProfile(record.movedTo, hopsLeft - 1);
+    if (!record.nickname || !record.sets || !Array.isArray(record.cardio)) throw new Error("Bad profile");
+    return { profile: record };
+  }
+
+  // Moves an old profile to a hidden ID and leaves a marker, so every device ends up on the same one.
+  async function convertOldProfile(profile, typedNickname) {
+    const userId = newUserId();
+    await uploadProfile({ ...profile, userId }, userId);
+    const owner = await claimNickname(profile.nickname, userId);
+    if (cleanName(typedNickname) !== cleanName(profile.nickname)) await claimNickname(typedNickname, owner);
+    const marker = { data: { stringValue: JSON.stringify({ movedToId: owner }) } };
+    await writeRecord("users", `u_${encodeURIComponent(cleanName(profile.nickname))}`, marker).catch(() => {});
+    return owner;
+  }
+
+  // Finds who a nickname belongs to, or null if it's new. Throws if it can't tell.
+  async function findUserId(nickname) {
+    const userId = await lookUpNickname(nickname);
+    if (userId) return userId;
+    const old = await findOldProfile(nickname);
+    if (!old) return null;
+    if (old.profile) return convertOldProfile(old.profile, nickname);
+    await claimNickname(nickname, old.userId); // an old name that hadn't been listed yet
+    return old.userId;
   }
 
   // Combines two copies of a profile. Every set from both copies is kept, matched by id, unless
@@ -730,11 +797,9 @@
   let localWrites = 0;
   let syncing = false;
   let syncAgain = false;
-  let renaming = false; // holds syncing back while a rename moves the online record
 
   // Brings the phone and the online copy into line, then says if anything is still waiting.
   async function syncNow() {
-    if (renaming) return;
     if (syncing) {
       syncAgain = true;
       return;
@@ -758,13 +823,13 @@
     const before = loadData();
     if (!before.nickname || !before.splits) return; // nothing to back up until setup is finished
 
-    const remote = await fetchProfile(before.nickname);
+    const userId = before.userId || await ensureUserId(before.nickname);
+    const remote = await fetchProfile(userId);
     const current = loadData(); // re-read: a set may have been logged during the wait
     if (!current.splits) return;
+    current.userId = userId;
 
-    const merged = remote ? mergeData(current, remote) : current;
-    // Renamed on another device: this phone followed the pointer, so take on the new name.
-    if (remote && cleanName(remote.nickname) !== cleanName(merged.nickname)) merged.nickname = remote.nickname;
+    const merged = remote ? { ...mergeData(current, remote), userId } : current;
     const mergedJson = JSON.stringify(merged);
     if (mergedJson !== JSON.stringify(current)) {
       saveData(merged);
@@ -773,6 +838,19 @@
     }
     if (!remote || mergedJson !== JSON.stringify(remote)) await uploadProfile(merged);
     if (localWrites === writesBefore) localStorage.removeItem(UNSYNCED_KEY);
+  }
+
+  // First sync on a phone without a hidden ID yet: finds or creates it, and remembers it.
+  async function ensureUserId(nickname) {
+    let userId = await findUserId(nickname);
+    if (!userId) {
+      const newId = newUserId();
+      userId = await claimNickname(nickname, newId);
+    }
+    const data = loadData();
+    data.userId = userId;
+    saveData(data);
+    return userId;
   }
 
   function updateSyncStatus() {
@@ -806,13 +884,11 @@
   const editorName = document.getElementById("editor-name");
   const editorHint = document.getElementById("editor-hint");
   const editorSave = document.getElementById("editor-save");
-  const editorRemove = document.getElementById("editor-remove");
   const typeButtons = [...document.querySelectorAll("[data-type]")];
   const splitEditor = document.getElementById("split-editor");
   const splitNameInput = document.getElementById("split-name");
   const splitHint = document.getElementById("split-hint");
   const splitSave = document.getElementById("split-save");
-  const splitRemove = document.getElementById("split-remove");
   const splitList = document.getElementById("split-list");
   const addSplit = document.getElementById("add-split");
   const orderButtons = [...document.querySelectorAll("[data-order]")];
@@ -887,6 +963,17 @@
     }));
   }
 
+  // A coral ✕ for a settings row. `field` says what tapping it deletes.
+  function deleteButton(label, field, value, disabled = false) {
+    const button = document.createElement("button");
+    button.className = "move delete";
+    button.textContent = "✕";
+    button.setAttribute("aria-label", label);
+    button.dataset[field] = value;
+    button.disabled = disabled;
+    return button;
+  }
+
   // A tappable row with up and down arrows. `scope` says which list the arrows reorder.
   function editLine(row, scope, index, count) {
     const line = document.createElement("div");
@@ -921,7 +1008,10 @@
         tag.textContent = "cardio";
         row.append(tag);
       }
-      return row;
+      const line = document.createElement("div");
+      line.className = "edit-line";
+      line.append(row, deleteButton(`Delete ${name}`, "deleteExercise", name));
+      return line;
     }));
   }
 
@@ -936,7 +1026,10 @@
       row.className = "edit-row";
       row.dataset.editSplit = i;
       row.textContent = split.name;
-      return editLine(row, "splits", i, data.splits.length);
+      const line = editLine(row, "splits", i, data.splits.length);
+      // Always keep at least one split.
+      line.append(deleteButton(`Delete ${split.name}`, "deleteSplit", i, data.splits.length === 1));
+      return line;
     }));
   }
 
@@ -1124,7 +1217,6 @@
     editingName = name;
     editorName.value = name || "";
     setEditorType(data.cardio.includes(name) ? "cardio" : "strength");
-    editorRemove.hidden = !name;
     updateEditor();
     editor.showModal();
   }
@@ -1171,7 +1263,6 @@
     const splits = loadData().splits;
     editingSplit = index;
     splitNameInput.value = index === null ? "" : splits[index].name;
-    splitRemove.hidden = index === null || splits.length === 1; // always keep at least one split
     updateSplitEditor();
     splitEditor.showModal();
   }
@@ -1191,39 +1282,38 @@
     nicknameEditor.showModal();
   }
 
-  // The nickname is also how the online record is found, so a new name means moving the record.
-  // It's saved under the new name first, so nothing is lost if the connection drops midway.
+  // The data stays put under its hidden ID, so this only checks the name is free, then reserves it.
+  // Old names keep working and stay reserved, because they still lead to this ID.
   async function saveNickname() {
     const nickname = newNickname.value.trim();
-    const oldNickname = loadData().nickname;
+    const { nickname: oldNickname, userId } = loadData();
     if (!nickname) return;
 
     if (cleanName(nickname) === cleanName(oldNickname)) {
       if (updateData((data) => { data.nickname = nickname; })) showScreen();
       return;
     }
+    if (!userId) {
+      newNicknameHint.textContent = "Couldn't connect. Check your signal and try again.";
+      syncNow();
+      return;
+    }
 
     newNicknameSave.disabled = true;
     newNicknameSave.textContent = "Checking...";
-    renaming = true;
     try {
-      // Someone's profile there blocks the name, unless it's this one's own old pointer.
-      const existing = await fetchProfile(nickname);
-      if (existing && cleanName(existing.nickname) !== cleanName(oldNickname)) {
+      // A name someone used before hidden IDs is theirs, even if it isn't listed yet.
+      const old = await findOldProfile(nickname);
+      const usedBySomeoneElse = old && old.userId !== userId;
+      const owner = usedBySomeoneElse ? null : await claimNickname(nickname, userId);
+      if (owner !== userId) {
         newNicknameHint.textContent = "That nickname is taken. Try another.";
         return;
       }
-      // Include anything another device saved online, because the old record is about to go.
-      const remote = await fetchProfile(oldNickname);
-      const merged = remote ? mergeData(loadData(), remote) : loadData();
-      await uploadProfile({ ...merged, nickname, changedAt: Date.now() });
-      // If this fails the old copy just stays as it was. The rename itself has already worked.
-      await uploadProfile({ movedTo: nickname }, oldNickname).catch(() => {});
     } catch {
       newNicknameHint.textContent = "Couldn't connect. Check your signal and try again.";
       return;
     } finally {
-      renaming = false;
       newNicknameSave.textContent = "SAVE";
       newNicknameSave.disabled = false;
     }
@@ -1232,6 +1322,23 @@
       showToast("renamed");
       showScreen();
     }
+  }
+
+  // Only this split's list changes. Sets stay, so adding it back brings them back.
+  function deleteExercise(name) {
+    const split = loadData().splits[currentSplit];
+    if (!confirm(`Delete ${name} from ${split.name}? Its logged sets are kept.`)) return;
+    const saved = updateData((data) => {
+      const list = data.splits[currentSplit];
+      list.exercises = list.exercises.filter((exercise) => exercise !== name);
+    });
+    if (saved) showScreen();
+  }
+
+  function deleteSplit(index) {
+    const { name } = loadData().splits[index];
+    if (!confirm(`Delete ${name}? Its exercise list goes, but logged sets are kept.`)) return;
+    if (updateData((data) => { data.splits.splice(index, 1); })) showScreen();
   }
 
   function moveItem(scope, index, delta) {
@@ -1357,6 +1464,8 @@
     if (button.dataset.type) setEditorType(button.dataset.type);
     if (button.dataset.move) moveItem(button.dataset.scope, Number(button.dataset.index), Number(button.dataset.move));
     if (button.dataset.editSplit) openSplitEditor(Number(button.dataset.editSplit));
+    if (button.dataset.deleteExercise) deleteExercise(button.dataset.deleteExercise);
+    if (button.dataset.deleteSplit) deleteSplit(Number(button.dataset.deleteSplit));
     if (button.dataset.addSplit !== undefined) openSplitEditor(null);
     if (button.dataset.editSet) {
       openLog(currentExercise, loadData().sets[currentExercise].find((set) => set.id === button.dataset.editSet));
@@ -1378,9 +1487,11 @@
 
     nicknameDone.disabled = true;
     nicknameDone.textContent = "Checking...";
+    let userId;
     let remote;
     try {
-      remote = await fetchProfile(nickname);
+      userId = await findUserId(nickname);
+      remote = userId && await fetchProfile(userId);
     } catch {
       nicknameHint.textContent = "Couldn't connect. Check your signal and try again.";
       return;
@@ -1391,6 +1502,7 @@
 
     const saved = updateData((data) => {
       Object.assign(data, remote ? mergeData(data, remote) : { nickname });
+      if (userId) data.userId = userId;
     }, false);
     if (saved) go("");
   });
@@ -1414,15 +1526,6 @@
     if (!editorSave.disabled) saveEditor();
   });
 
-  // Only this split's list changes. Sets stay, so adding it back brings them back.
-  editorRemove.addEventListener("click", () => {
-    const saved = updateData((data) => {
-      const split = data.splits[currentSplit];
-      split.exercises = split.exercises.filter((name) => name !== editingName);
-    });
-    if (saved) showScreen();
-  });
-
   splitNameInput.addEventListener("input", updateSplitEditor);
 
   // Sets are stored by exercise, so changing splits doesn't touch them.
@@ -1435,12 +1538,6 @@
       else data.splits[editingSplit].name = name;
     });
     if (saved) showScreen();
-  });
-
-  splitRemove.addEventListener("click", () => {
-    const { name } = loadData().splits[editingSplit];
-    if (!confirm(`Remove ${name}? Its exercise list goes, but logged sets are kept.`)) return;
-    if (updateData((data) => { data.splits.splice(editingSplit, 1); })) showScreen();
   });
 
   nicknameRow.addEventListener("click", openNicknameEditor);
@@ -1504,6 +1601,8 @@
     showScreen();
   });
   window.addEventListener("online", syncNow);
+  // Not available when opened as a file or over plain http, which is fine for local testing.
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") syncNow();
   });
