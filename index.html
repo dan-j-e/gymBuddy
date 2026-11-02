@@ -86,6 +86,11 @@
     padding-bottom: max(var(--gap), env(safe-area-inset-bottom));
   }
   .screen[hidden] { display: none; }
+  /* When installed, iPhone blurs about 60pt below the status bar and pages can't turn that off.
+     Measured on a real phone: text is clear from roughly 120pt down. */
+  @media (display-mode: standalone) {
+    .screen { padding-top: calc(max(var(--gap), env(safe-area-inset-top)) + 60px); }
+  }
 
   h1 {
     padding: 14px 6px 6px;
