@@ -44,6 +44,20 @@
     font-family: ui-monospace, "SF Mono", Menlo, "Roboto Mono", monospace;
   }
 
+  .icon {
+    width: 22px;
+    height: 22px;
+    flex-shrink: 0;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    vertical-align: middle;
+  }
+  .delete-small .icon { width: 16px; height: 16px; }
+  #tick .icon { width: 26px; height: 26px; stroke-width: 2.25; }
+
   button {
     background: var(--card);
     border: 0;
@@ -362,7 +376,18 @@
     font-size: 0.85rem;
   }
   .chart-card details { margin-top: 10px; color: var(--muted); font-size: 0.85rem; }
-  .chart-card summary { padding: 8px 0; cursor: pointer; }
+  .chart-card summary { display: flex; align-items: center; gap: 6px; padding: 8px 0; cursor: pointer; list-style: none; }
+  .chart-card summary::-webkit-details-marker { display: none; }
+  .chart-card summary::before {
+    content: "";
+    width: 14px;
+    height: 14px;
+    background: currentColor;
+    -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9 6l6 6-6 6'/%3E%3C/svg%3E") center / contain no-repeat;
+    mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9 6l6 6-6 6'/%3E%3C/svg%3E") center / contain no-repeat;
+    transition: transform 120ms;
+  }
+  .chart-card details[open] summary::before { transform: rotate(90deg); }
   .chart-table { width: 100%; border-collapse: collapse; color: var(--text); font-variant-numeric: tabular-nums; }
   .chart-table td { padding: 5px 0; border-top: 1px solid var(--line); }
   .chart-table td:last-child { text-align: right; }
@@ -395,7 +420,15 @@
     font-weight: 500;
     text-align: left;
   }
-  .settings-row::after { content: "›"; color: var(--muted); font-size: 1.3rem; }
+  .settings-row::after {
+    content: "";
+    flex-shrink: 0;
+    width: 18px;
+    height: 18px;
+    background: var(--muted);
+    -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9 6l6 6-6 6'/%3E%3C/svg%3E") center / contain no-repeat;
+    mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9 6l6 6-6 6'/%3E%3C/svg%3E") center / contain no-repeat;
+  }
   .settings-row.no-arrow::after { content: none; }
   .settings-row .row-value { margin-left: auto; color: var(--muted); overflow-wrap: anywhere; }
   .settings-row:disabled { color: var(--muted); cursor: default; }
@@ -488,15 +521,17 @@
   }
   dialog::backdrop { background: rgba(0, 0, 0, 0.6); }
 
+  /* Three rows: the inputs, the note, then [relog][history][tick]. Six columns let two inputs
+     take half each and three inputs a third each, under the same three buttons. */
   #log form {
     display: grid;
-    grid-template-columns: 1fr 1fr 64px;
+    grid-template-columns: repeat(6, 1fr);
     gap: var(--gap);
     padding: var(--gap);
   }
-  /* Three inputs need the width, so the tick drops to its own full-width row */
-  #log form.three-fields { grid-template-columns: repeat(3, 1fr); }
-  #log form.three-fields #tick { grid-column: 1 / -1; }
+  #log input { grid-column: span 3; }
+  #log form.three-fields input { grid-column: span 2; }
+  #log #log-note { grid-column: 1 / -1; }
 
   #log input {
     padding: 0;
@@ -504,18 +539,18 @@
     text-align: center;
   }
   #log input::placeholder { font-size: 0.875rem; }
-
-  #log .quiet { grid-column: 1 / -1; }
-  /* Note and repeat share one line: [ note ][ ↻ ]. Without a last set, the note takes the whole line. */
-  .note-row { grid-column: 1 / -1; display: flex; gap: var(--gap); }
-  #log #log-note { flex: 1; height: 48px; padding: 0 14px; font-size: 1rem; text-align: left; }
+  #log #log-note { height: 48px; padding: 0 14px; font-size: 1rem; text-align: left; }
   #log #log-note::placeholder { font-size: 1rem; }
-  #log-repeat { flex: 0 0 64px; height: 48px; font-size: 1.4rem; line-height: 1; }
-  #log-repeat[hidden] { display: none; }
+
+  #log-repeat, #log-history, #log-delete, #tick { grid-column: span 2; height: 56px; }
+  #log-repeat { font-size: 1.4rem; line-height: 1; }
+  #log-history, #log-delete { font-size: 1rem; }
+  #log-repeat:disabled, #log-history:disabled { color: var(--line); cursor: default; }
+  #log-history[hidden], #log-delete[hidden] { display: none; }
   .set-note { display: block; margin-top: 3px; color: var(--muted); font-size: 0.9rem; font-weight: 400; overflow-wrap: anywhere; }
   #log-delete { color: var(--coral); }
 
-  #tick { height: 64px; min-height: 0; font-size: 1.75rem; }
+  #tick { min-height: 0; font-size: 1.75rem; }
   #tick:disabled { background: var(--line); }
 
   .name-editor form {
@@ -570,6 +605,9 @@
     border-radius: 24px;
     font-size: 1.05rem;
     font-weight: 600;
+    width: max-content;
+    max-width: calc(100vw - 4 * var(--gap));
+    text-align: center;
     pointer-events: none; /* never blocks a tap on what's underneath */
     animation: rise 120ms ease-out;
   }
@@ -618,6 +656,7 @@
   .toggle button { background: none; color: var(--text); }
   dialog { background: var(--bg); animation: none; }
   #toast { background: var(--text); color: var(--bg); border-radius: 8px; animation: none; }
+  #toast.success { background: #34c27a; border-color: #34c27a; color: #0b1a12; } /* green: logged */
   .hero-figure { font-size: 1.9rem; }
   .chart-card svg text.end-label { fill: var(--text); }
   .edit-row .set-note { padding: 0; border: 0; border-radius: 0; background: none; color: var(--muted); font-size: 0.9rem; }
@@ -627,6 +666,16 @@
 </style>
 </head>
 <body>
+
+<!-- One icon set, so every symbol has the same size, stroke and ends. Drawn with currentColor. -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-back" viewBox="0 0 24 24"><path d="M19 12H5M11 6l-6 6 6 6"/></symbol>
+  <symbol id="i-up" viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></symbol>
+  <symbol id="i-down" viewBox="0 0 24 24"><path d="M12 5v14M6 13l6 6 6-6"/></symbol>
+  <symbol id="i-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
+  <symbol id="i-repeat" viewBox="0 0 24 24"><path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3M19.5 4v5h-5"/></symbol>
+</svg>
 
 <main id="nickname-screen" class="screen" hidden>
   <h1>What's your nickname?</h1>
@@ -645,7 +694,7 @@
     <p id="setup-hint" class="hint"></p>
     <div id="custom-names" hidden></div>
     <div class="bottom-bar">
-      <button id="setup-back" type="button" class="back" data-go="name" aria-label="Back">←</button>
+      <button id="setup-back" type="button" class="back" data-go="name" aria-label="Back"><svg class="icon" aria-hidden="true"><use href="#i-back"/></svg></button>
       <button id="custom-done" class="primary" disabled>Done</button>
     </div>
   </form>
@@ -657,7 +706,7 @@
   <div id="install-hint" hidden>
     <p id="install-text" class="hint"></p>
     <button id="install-go" class="wide-pill" hidden>INSTALL</button>
-    <button id="install-dismiss" class="move" aria-label="Dismiss">✕</button>
+    <button id="install-dismiss" class="move" aria-label="Dismiss"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button>
   </div>
   <div id="split-rows" class="row-list"></div>
   <div class="bottom-bar">
@@ -669,7 +718,7 @@
 <main id="progress" class="screen" hidden>
   <h1>Progress</h1>
   <div id="progress-area"></div>
-  <button class="back" data-go="" aria-label="Back">←</button>
+  <button class="back" data-go="" aria-label="Back"><svg class="icon" aria-hidden="true"><use href="#i-back"/></svg></button>
 </main>
 
 <main id="app-settings" class="screen" hidden>
@@ -694,7 +743,7 @@
     </section>
   </div>
   <div class="bottom-bar">
-    <button class="back" data-go="" aria-label="Back">←</button>
+    <button class="back" data-go="" aria-label="Back"><svg class="icon" aria-hidden="true"><use href="#i-back"/></svg></button>
     <button id="redo-setup" class="wide-pill">Redo setup</button>
     <button id="purge-open" class="wide-pill danger">Purge history</button>
   </div>
@@ -707,7 +756,7 @@
   </div>
   <div id="bubbles"></div>
   <div class="bottom-bar">
-    <button class="back" data-go="" aria-label="Back">←</button>
+    <button class="back" data-go="" aria-label="Back"><svg class="icon" aria-hidden="true"><use href="#i-back"/></svg></button>
     <button id="settings-link" class="wide-pill">SETTINGS</button>
   </div>
 </main>
@@ -716,7 +765,7 @@
   <h1 id="settings-title"></h1>
   <div id="settings-list" class="edit-list"></div>
   <div class="bottom-bar">
-    <button id="settings-back" class="back" aria-label="Back">←</button>
+    <button id="settings-back" class="back" aria-label="Back"><svg class="icon" aria-hidden="true"><use href="#i-back"/></svg></button>
     <button class="primary" data-add>+ ADD EXERCISE</button>
   </div>
 </main>
@@ -727,7 +776,7 @@
     <div id="history-chart"></div>
     <div id="history-list"></div>
   </div>
-  <button id="history-back" class="back" aria-label="Back">←</button>
+  <button id="history-back" class="back" aria-label="Back"><svg class="icon" aria-hidden="true"><use href="#i-back"/></svg></button>
 </main>
 
 <dialog id="log">
@@ -735,13 +784,11 @@
     <input type="text" autocomplete="off" autofocus>
     <input type="text" autocomplete="off">
     <input type="text" autocomplete="off" hidden>
-    <button id="tick" class="primary" aria-label="Save set" disabled>✓</button>
-    <div class="note-row">
-      <input id="log-note" type="text" maxlength="100" placeholder="Note (optional)" aria-label="Note" autocomplete="off">
-      <button id="log-repeat" type="button">↻︎</button>
-    </div>
-    <button id="log-history" type="button" class="quiet">History</button>
-    <button id="log-delete" type="button" class="quiet">Delete this set</button>
+    <input id="log-note" type="text" maxlength="100" placeholder="Note (optional)" aria-label="Note" autocomplete="off">
+    <button id="log-repeat" type="button"><svg class="icon" aria-hidden="true"><use href="#i-repeat"/></svg></button>
+    <button id="log-history" type="button">History</button>
+    <button id="log-delete" type="button">Delete</button>
+    <button id="tick" class="primary" aria-label="Save set" disabled><svg class="icon" aria-hidden="true"><use href="#i-check"/></svg></button>
   </form>
 </dialog>
 
@@ -1324,7 +1371,7 @@
   function deleteButton(label, field, value, disabled = false) {
     const button = document.createElement("button");
     button.className = "move delete";
-    button.textContent = "✕";
+    button.append(icon("close"));
     button.setAttribute("aria-label", label);
     button.dataset[field] = value;
     button.disabled = disabled;
@@ -1338,7 +1385,7 @@
     const arrow = (text, label, delta, disabled) => {
       const button = document.createElement("button");
       button.className = "move";
-      button.textContent = text;
+      button.append(icon(text));
       button.setAttribute("aria-label", label);
       button.dataset.move = delta;
       button.dataset.scope = scope;
@@ -1346,7 +1393,7 @@
       button.disabled = disabled;
       return button;
     };
-    line.append(row, arrow("↑", "Move up", -1, index === 0), arrow("↓", "Move down", 1, index === count - 1));
+    line.append(row, arrow("up", "Move up", -1, index === 0), arrow("down", "Move down", 1, index === count - 1));
     return line;
   }
 
@@ -1437,6 +1484,12 @@
   // since each shows one thing. Tapping or dragging on a chart reads off that day's value.
   const CHART = { width: 340, height: 170, left: 40, right: 14, top: 18, bottom: 22 };
   const VOLUME_DAYS = 28;
+
+  function icon(name) {
+    const svg = svgElement("svg", { class: "icon", "aria-hidden": "true" });
+    svg.append(svgElement("use", { href: `#i-${name}` }));
+    return svg;
+  }
 
   function svgElement(tag, attributes = {}) {
     const element = document.createElementNS("http://www.w3.org/2000/svg", tag);
@@ -1702,7 +1755,7 @@
       card.append(chartTable([...entries].reverse().map((entry) => {
         const remove = document.createElement("button");
         remove.className = "move delete delete-small";
-        remove.textContent = "✕";
+        remove.append(icon("close"));
         remove.setAttribute("aria-label", `Delete weight from ${formatDate(entry.date)}`);
         remove.dataset.deleteBody = entry.id;
         const time = new Date(loggedAt(entry)).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
@@ -2049,13 +2102,16 @@
       if (setToEdit && field.key in setToEdit) input.value = setToEdit[field.key];
     });
     // Repeat copies the last set's numbers into the boxes, ready to check and save.
-    logRepeat.hidden = Boolean(setToEdit) || !lastSet.id || ("incline" in lastSet) !== isCardio;
+    // Always shown, greyed out when there's no earlier set to copy.
+    logRepeat.disabled = Boolean(setToEdit) || !lastSet.id || ("incline" in lastSet) !== isCardio;
     // The symbol is the button; the label says what it repeats for screen readers and long-press.
-    const repeatLabel = logRepeat.hidden ? "" : `Repeat last: ${describeSet(lastSet)}`;
+    const repeatLabel = logRepeat.disabled ? "Nothing to repeat yet" : `Repeat last: ${describeSet(lastSet)}`;
     logRepeat.setAttribute("aria-label", repeatLabel);
     logRepeat.title = repeatLabel;
     logNote.value = (setToEdit && setToEdit.note) || "";
-    logHistory.hidden = Boolean(setToEdit) || pastSets.length === 0;
+    // Editing a past set comes from History, so Delete takes History's place.
+    logHistory.hidden = Boolean(setToEdit);
+    logHistory.disabled = pastSets.length === 0;
     logDelete.hidden = !setToEdit;
     updateTick();
     openPopup(logDialog);
@@ -2119,7 +2175,7 @@
       data.sets[currentExercise] = data.sets[currentExercise] || [];
       data.sets[currentExercise].push(set);
     }, false);
-    if (saved) showToast("logged");
+    if (saved) showToast(`Logged ${currentExercise}`, "success");
     logDialog.close();
   }
 
@@ -2148,11 +2204,13 @@
     showScreen();
   }
 
-  function showToast(message) {
+  // "success" turns it green, for a set that's been logged.
+  function showToast(message, kind = "") {
     toast.textContent = message;
+    toast.className = kind;
     toast.hidden = false;
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => { toast.hidden = true; }, 1200);
+    toastTimer = setTimeout(() => { toast.hidden = true; }, kind ? 1800 : 1200);
   }
 
   document.addEventListener("click", (event) => {
