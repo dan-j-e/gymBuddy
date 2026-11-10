@@ -399,7 +399,8 @@
   .settings-row.no-arrow::after { content: none; }
   .settings-row .row-value { margin-left: auto; color: var(--muted); overflow-wrap: anywhere; }
   .settings-row:disabled { color: var(--muted); cursor: default; }
-  .settings-row.danger { color: var(--danger, var(--coral)); }
+  .settings-row.danger, .wide-pill.danger { color: var(--danger, var(--coral)); }
+  #app-settings .bottom-bar .wide-pill { font-size: 0.95rem; }
 
   /* Settings and history screens */
   .edit-list {
@@ -505,6 +506,13 @@
   #log input::placeholder { font-size: 0.875rem; }
 
   #log .quiet { grid-column: 1 / -1; }
+  /* Note and repeat share one line: [ note ][ ↻ ]. Without a last set, the note takes the whole line. */
+  .note-row { grid-column: 1 / -1; display: flex; gap: var(--gap); }
+  #log #log-note { flex: 1; height: 48px; padding: 0 14px; font-size: 1rem; text-align: left; }
+  #log #log-note::placeholder { font-size: 1rem; }
+  #log-repeat { flex: 0 0 64px; height: 48px; font-size: 1.4rem; line-height: 1; }
+  #log-repeat[hidden] { display: none; }
+  .set-note { display: block; margin-top: 3px; color: var(--muted); font-size: 0.9rem; font-weight: 400; overflow-wrap: anywhere; }
   #log-delete { color: var(--coral); }
 
   #tick { height: 64px; min-height: 0; font-size: 1.75rem; }
@@ -612,6 +620,7 @@
   #toast { background: var(--text); color: var(--bg); border-radius: 8px; animation: none; }
   .hero-figure { font-size: 1.9rem; }
   .chart-card svg text.end-label { fill: var(--text); }
+  .edit-row .set-note { padding: 0; border: 0; border-radius: 0; background: none; color: var(--muted); font-size: 0.9rem; }
   .primary, .wide-pill, .back, .row, .bubble, .move, .toggle button, #reorder-toggle, #install-go, #install-dismiss,
   #log input, .setup-form input, .name-editor input { border-radius: 8px; }
   .edit-row small, .set-date, .chart-card svg text, .chart-title, .chart-readout, .hint { font-family: inherit; }
@@ -683,14 +692,11 @@
       <div id="split-list" class="edit-list"></div>
       <button id="add-split" class="settings-row no-arrow" data-add-split>+ Add split</button>
     </section>
-    <section>
-      <h2 class="settings-heading">Data</h2>
-      <button id="redo-setup" class="settings-row">Redo setup</button>
-      <button id="purge-open" class="settings-row danger">Purge history</button>
-    </section>
   </div>
   <div class="bottom-bar">
     <button class="back" data-go="" aria-label="Back">←</button>
+    <button id="redo-setup" class="wide-pill">Redo setup</button>
+    <button id="purge-open" class="wide-pill danger">Purge history</button>
   </div>
 </main>
 
@@ -730,6 +736,10 @@
     <input type="text" autocomplete="off">
     <input type="text" autocomplete="off" hidden>
     <button id="tick" class="primary" aria-label="Save set" disabled>✓</button>
+    <div class="note-row">
+      <input id="log-note" type="text" maxlength="100" placeholder="Note (optional)" aria-label="Note" autocomplete="off">
+      <button id="log-repeat" type="button">↻︎</button>
+    </div>
     <button id="log-history" type="button" class="quiet">History</button>
     <button id="log-delete" type="button" class="quiet">Delete this set</button>
   </form>
@@ -766,8 +776,8 @@
 <dialog id="body-editor" class="name-editor">
   <form>
     <input id="body-height" type="text" inputmode="decimal" placeholder="Height in cm" aria-label="Height in centimetres" autocomplete="off">
-    <input id="body-weight" type="text" inputmode="decimal" placeholder="Today's weight in kg" aria-label="Today's body weight in kilograms" autocomplete="off">
-    <p>Both optional. Weight is saved against today.</p>
+    <input id="body-weight" type="text" inputmode="decimal" placeholder="Weight in kg" aria-label="Body weight in kilograms" autocomplete="off">
+    <p>Both optional. Each weight is added, and the chart uses each day's average.</p>
     <button id="body-save" class="primary">SAVE</button>
   </form>
 </dialog>
@@ -1234,7 +1244,9 @@
   const logDelete = document.getElementById("log-delete");
   const logDialog = document.getElementById("log");
   const logForm = logDialog.querySelector("form");
-  const logInputs = [...logForm.querySelectorAll("input")];
+  const logInputs = [...logForm.querySelectorAll("input:not(#log-note)")];
+  const logNote = document.getElementById("log-note");
+  const logRepeat = document.getElementById("log-repeat");
   const tick = document.getElementById("tick");
   const toast = document.getElementById("toast");
 
@@ -1379,17 +1391,19 @@
     }));
   }
 
-  // Newest first, except that strength exercises pin the heaviest set to the top, with reps as
-  // the tie-break.
+  // Newest first. Bests belong on Progress, not here.
   function renderHistory(data, name, index) {
     document.getElementById("history-title").textContent = name;
     document.getElementById("history-back").dataset.go = index;
     const sets = data.sets[name] || [];
-    historyChart.replaceChildren(...exerciseChart(sets));
-    const strength = sets.filter((set) => "reps" in set);
-    const best = strength.length > 1
-      ? strength.reduce((top, set) => (set.weight > top.weight || (set.weight === top.weight && set.reps > top.reps) ? set : top))
-      : null;
+    const chart = exerciseChart(sets);
+    if (chart.length === 0 && sets.length > 0) {
+      const wait = document.createElement("p");
+      wait.className = "hint";
+      wait.textContent = "Log this on another day to see a progress chart here.";
+      chart.push(wait);
+    }
+    historyChart.replaceChildren(...chart);
 
     if (sets.length === 0) {
       const message = document.createElement("p");
@@ -1398,9 +1412,7 @@
       historyList.replaceChildren(message);
       return;
     }
-    const newestFirst = [...sets].reverse();
-    const ordered = best ? [best, ...newestFirst.filter((set) => set !== best)] : newestFirst;
-    historyList.replaceChildren(...ordered.map((set) => {
+    historyList.replaceChildren(...[...sets].reverse().map((set) => {
       const row = document.createElement("button");
       row.className = "edit-row";
       row.dataset.editSet = set.id;
@@ -1410,12 +1422,13 @@
       date.className = "set-date";
       date.textContent = formatDate(set.date);
       label.append(date);
-      row.append(label);
-      if (set === best) {
-        const tag = document.createElement("small");
-        tag.textContent = "best";
-        row.append(tag);
+      if (set.note) {
+        const note = document.createElement("small");
+        note.className = "set-note";
+        note.textContent = set.note;
+        label.append(note);
       }
+      row.append(label);
       return row;
     }));
   }
@@ -1680,8 +1693,11 @@
     const readoutSpace = chartReadout("\u00a0");
     card.append(summary, slot, readoutSpace);
 
-    const weighIns = new Map(entries.map((entry) => [entry.date, entry])); // the latest per day
-    const series = [...weighIns.values()].map((entry) => ({ date: entry.date, value: entry.weight }));
+    // One point per day: the average of that day's weigh-ins.
+    const byDay = new Map();
+    for (const entry of entries) byDay.set(entry.date, [...(byDay.get(entry.date) || []), entry.weight]);
+    const series = [...byDay].sort(([a], [b]) => a.localeCompare(b))
+      .map(([date, weights]) => ({ date, value: Math.round((weights.reduce((sum, kg) => sum + kg, 0) / weights.length) * 10) / 10 }));
     if (entries.length > 0) {
       card.append(chartTable([...entries].reverse().map((entry) => {
         const remove = document.createElement("button");
@@ -1689,7 +1705,8 @@
         remove.textContent = "✕";
         remove.setAttribute("aria-label", `Delete weight from ${formatDate(entry.date)}`);
         remove.dataset.deleteBody = entry.id;
-        return [formatDate(entry.date), `${entry.weight} kg`, remove];
+        const time = new Date(loggedAt(entry)).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+        return [`${formatDate(entry.date)}, ${time}`, `${entry.weight} kg`, remove];
       })));
     }
     const update = document.createElement("button");
@@ -2031,6 +2048,13 @@
       input.inputMode = field.whole ? "numeric" : "decimal";
       if (setToEdit && field.key in setToEdit) input.value = setToEdit[field.key];
     });
+    // Repeat copies the last set's numbers into the boxes, ready to check and save.
+    logRepeat.hidden = Boolean(setToEdit) || !lastSet.id || ("incline" in lastSet) !== isCardio;
+    // The symbol is the button; the label says what it repeats for screen readers and long-press.
+    const repeatLabel = logRepeat.hidden ? "" : `Repeat last: ${describeSet(lastSet)}`;
+    logRepeat.setAttribute("aria-label", repeatLabel);
+    logRepeat.title = repeatLabel;
+    logNote.value = (setToEdit && setToEdit.note) || "";
     logHistory.hidden = Boolean(setToEdit) || pastSets.length === 0;
     logDelete.hidden = !setToEdit;
     updateTick();
@@ -2067,6 +2091,16 @@
     tick.disabled = !isValidSet();
   }
 
+  function repeatLastSet() {
+    const pastSets = loadData().sets[currentExercise] || [];
+    const lastSet = pastSets[pastSets.length - 1];
+    if (!lastSet) return;
+    currentFields.forEach((field, i) => {
+      logInputs[i].value = field.key in lastSet ? lastSet[field.key] : "";
+    });
+    updateTick();
+  }
+
   function logSet() {
     if (editingSetId) {
       saveEditedSet();
@@ -2078,6 +2112,8 @@
       date: todayLocal(),
     };
     currentFields.forEach((field, i) => { set[field.key] = Number(logInputs[i].value); });
+    const note = logNote.value.trim();
+    if (note) set.note = note;
 
     const saved = updateData((data) => {
       data.sets[currentExercise] = data.sets[currentExercise] || [];
@@ -2091,6 +2127,9 @@
     const saved = updateData((data) => {
       const set = data.sets[currentExercise].find((past) => past.id === editingSetId);
       currentFields.forEach((field, i) => { set[field.key] = Number(logInputs[i].value); });
+      const note = logNote.value.trim();
+      if (note) set.note = note;
+      else delete set.note;
       set.editedAt = Date.now();
     }, false);
     if (saved) showToast("updated");
@@ -2242,6 +2281,7 @@
   });
 
   logDelete.addEventListener("click", deleteEditingSet);
+  logRepeat.addEventListener("click", repeatLastSet);
 
   function decimalsOnly(text) {
     const [whole, ...decimals] = text
@@ -2253,9 +2293,8 @@
 
   function openBodyEditor() {
     const data = loadData();
-    const today = (data.body || []).filter((entry) => entry.date === todayLocal()).pop();
     bodyHeight.value = data.height || "";
-    bodyWeight.value = today ? today.weight : "";
+    bodyWeight.value = "";
     updateBodySave();
     openPopup(bodyEditor);
   }
@@ -2287,19 +2326,7 @@
       else delete data.height;
       if (!weight) return;
       data.body = data.body || [];
-      // Two phones can each log one today. Keep the latest and drop the rest, so this edit shows.
-      const todays = data.body.filter((entry) => entry.date === todayLocal());
-      const today = todays.pop();
-      if (todays.length) {
-        data.body = data.body.filter((entry) => !todays.includes(entry));
-        data.deleted = [...(data.deleted || []), ...todays.map((entry) => entry.id)].sort();
-      }
-      if (today) {
-        today.weight = weight;
-        today.editedAt = Date.now();
-      } else {
-        data.body.push({ id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`, date: todayLocal(), weight });
-      }
+      data.body.push({ id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`, date: todayLocal(), weight });
     }, false);
     if (saved) {
       showToast("saved");
