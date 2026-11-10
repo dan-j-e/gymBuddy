@@ -371,6 +371,36 @@
   .delete-small { width: 36px; height: 36px; background: var(--line); }
   #history-list { display: flex; flex-direction: column; gap: var(--gap); }
 
+  /* App settings: one scrolling page in labelled sections */
+  .settings-page { gap: 22px; padding-bottom: var(--gap); }
+  .settings-page section { display: flex; flex-direction: column; gap: 8px; }
+  .settings-heading {
+    padding: 0 4px;
+    color: var(--muted);
+    font-size: 0.8rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .settings-page .hint { padding: 0 4px; }
+  .settings-page #split-list { flex: none; overflow: visible; }
+  .settings-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    min-height: 56px;
+    padding: 0 16px;
+    font-size: 1.05rem;
+    font-weight: 500;
+    text-align: left;
+  }
+  .settings-row::after { content: "›"; color: var(--muted); font-size: 1.3rem; }
+  .settings-row.no-arrow::after { content: none; }
+  .settings-row .row-value { margin-left: auto; color: var(--muted); overflow-wrap: anywhere; }
+  .settings-row:disabled { color: var(--muted); cursor: default; }
+  .settings-row.danger { color: var(--danger, var(--coral)); }
+
   /* Settings and history screens */
   .edit-list {
     display: flex;
@@ -519,7 +549,6 @@
   .purge-inputs { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--gap); }
   .name-editor .purge-inputs input { padding: 0; text-align: center; font-size: 1.5rem; }
   #purge-go:not(:disabled) { background: var(--coral); }
-  #purge-open { color: var(--coral); }
 
   #toast {
     position: fixed;
@@ -576,7 +605,7 @@
   .primary, #tick, #install-go { background: var(--text); color: var(--bg); border-color: var(--text); }
   .primary:disabled, #tick:disabled, .name-editor .primary:disabled { background: none; color: var(--muted); border-color: var(--line); }
   #purge-go:not(:disabled) { background: var(--danger); border-color: var(--danger); color: var(--bg); }
-  .delete, #log-delete, #purge-open { color: var(--danger); }
+  .delete, #log-delete { color: var(--danger); }
   .quiet { border: none; }
   .toggle button { background: none; color: var(--text); }
   dialog { background: var(--bg); animation: none; }
@@ -636,20 +665,32 @@
 
 <main id="app-settings" class="screen" hidden>
   <h1>Settings</h1>
-  <p class="hint section-label">Your nickname</p>
-  <button id="nickname-row" class="edit-row"></button>
-  <p class="hint section-label">Which box comes first when logging</p>
-  <div class="toggle">
-    <button data-order="reps">reps first</button>
-    <button data-order="weight">weight first</button>
+  <div class="scroll-area settings-page">
+    <section>
+      <h2 class="settings-heading">You</h2>
+      <button id="nickname-row" class="settings-row"><span>Nickname</span><span id="nickname-value" class="row-value"></span></button>
+    </section>
+    <section>
+      <h2 class="settings-heading">Logging</h2>
+      <p class="hint">Which box comes first</p>
+      <div class="toggle">
+        <button data-order="reps">reps first</button>
+        <button data-order="weight">weight first</button>
+      </div>
+    </section>
+    <section>
+      <h2 class="settings-heading">Splits</h2>
+      <div id="split-list" class="edit-list"></div>
+      <button id="add-split" class="settings-row no-arrow" data-add-split>+ Add split</button>
+    </section>
+    <section>
+      <h2 class="settings-heading">Data</h2>
+      <button id="redo-setup" class="settings-row">Redo setup</button>
+      <button id="purge-open" class="settings-row danger">Purge history</button>
+    </section>
   </div>
-  <p class="hint section-label">Your splits</p>
-  <div id="split-list" class="edit-list"></div>
-  <button id="redo-setup" class="quiet">Redo setup</button>
-  <button id="purge-open" class="quiet">Purge history</button>
   <div class="bottom-bar">
     <button class="back" data-go="" aria-label="Back">←</button>
-    <button id="add-split" class="primary" data-add-split>+ ADD SPLIT</button>
   </div>
 </main>
 
@@ -1320,11 +1361,12 @@
   }
 
   function renderAppSettings(data) {
-    nicknameRow.textContent = data.nickname;
+    document.getElementById("nickname-value").textContent = data.nickname;
     orderButtons.forEach((button) => {
       button.classList.toggle("chosen", (button.dataset.order === "weight") === Boolean(data.weightFirst));
     });
     addSplit.disabled = data.splits.length >= MAX_SPLITS;
+    addSplit.textContent = addSplit.disabled ? `${MAX_SPLITS} splits is the most` : "+ Add split";
     splitList.replaceChildren(...data.splits.map((split, i) => {
       const row = document.createElement("button");
       row.className = "edit-row";
