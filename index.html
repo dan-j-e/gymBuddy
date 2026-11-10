@@ -36,7 +36,7 @@
     --gap: 10px;
   }
 
-  html, body { height: 100%; }
+  html, body { height: 100%; overflow: hidden; } /* screens scroll their own lists; the page itself never moves */
 
   body {
     background: var(--bg);
@@ -307,6 +307,29 @@
     gap: var(--gap);
   }
   .scroll-area > * { flex-shrink: 0; }
+  /* Progress fills the screen with two equal cards. Each chart is drawn to fit its card. */
+  #progress-area {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--gap);
+  }
+  #progress-area > .chart-card {
+    flex: 1 1 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .chart-slot { flex: 1 1 0; min-height: 0; overflow: hidden; }
+  #progress-area .chart-slot svg { height: 100%; margin-top: 0; }
+  #progress-area details { flex: 0 1 auto; min-height: 0; overflow-y: auto; }
+  #progress-area .wide-pill { flex: 0 0 auto; min-height: 48px; }
+  /* Opening "Show numbers" swaps the chart for the table, so the card never grows. */
+  #progress-area .chart-card:has(details[open]) .chart-slot { display: none; }
+  #progress-area .chart-card:has(details[open]) details { flex: 1 1 0; }
+
   .chart-card {
     padding: 16px;
     background: var(--card);
@@ -558,7 +581,7 @@
   .toggle button { background: none; color: var(--text); }
   dialog { background: var(--bg); animation: none; }
   #toast { background: var(--text); color: var(--bg); border-radius: 8px; animation: none; }
-  .hero-figure { font-size: 2.5rem; }
+  .hero-figure { font-size: 1.9rem; }
   .chart-card svg text.end-label { fill: var(--text); }
   .primary, .wide-pill, .back, .row, .bubble, .move, .toggle button, #reorder-toggle, #install-go, #install-dismiss,
   #log input, .setup-form input, .name-editor input { border-radius: 8px; }
@@ -607,7 +630,7 @@
 
 <main id="progress" class="screen" hidden>
   <h1>Progress</h1>
-  <div id="progress-area" class="scroll-area"></div>
+  <div id="progress-area"></div>
   <button class="back" data-go="" aria-label="Back">←</button>
 </main>
 
@@ -1449,7 +1472,7 @@
   }
 
   // A value over time. The axis fits the data rather than starting at 0, so small gains show.
-  function lineChart(entries, unit, card) {
+  function lineChart(entries, unit) {
     const values = entries.map((entry) => entry.value);
     const low = Math.min(...values);
     const high = Math.max(...values);
@@ -1486,7 +1509,21 @@
     const describePoint = (point) => `${formatDate(point.date)}: ${point.value}${unit}`;
     const readout = chartReadout(describePoint(end));
     addReadout(svg, readout, points, describePoint);
-    card.append(svg, readout);
+    return { svg, readout };
+  }
+
+  // Draws at the slot's real size, so the chart fills its space without stretching text or dots.
+  function drawInSlot(slot, draw) {
+    const width = slot.clientWidth;
+    const height = slot.clientHeight;
+    if (width < 120 || height < 70) return null; // too small to read: the numbers table still has it
+    const normal = { width: CHART.width, height: CHART.height };
+    Object.assign(CHART, { width, height });
+    try {
+      return draw();
+    } finally {
+      Object.assign(CHART, normal);
+    }
   }
 
   function chartCard(title) {
@@ -1516,7 +1553,8 @@
     const entries = [...byDay].map(([date, value]) => ({ date, value })).sort((a, b) => a.date.localeCompare(b.date));
     if (entries.length < 2) return [];
     const card = chartCard(title);
-    lineChart(entries, unit, card);
+    const { svg, readout } = lineChart(entries, unit);
+    card.append(svg, readout);
     return [card];
   }
 
@@ -1535,13 +1573,13 @@
     const hero = document.createElement("p");
     hero.className = "hero-figure";
     hero.textContent = `${Math.round(volume.get(todayLocal()) || 0).toLocaleString()} kg`;
-    card.append(hero);
+    const slot = document.createElement("div");
+    slot.className = "chart-slot";
+    card.append(hero, slot);
 
     if (volume.size === 0) {
-      const empty = document.createElement("p");
-      empty.className = "chart-readout";
-      empty.textContent = "Log a set with a weight to start your chart.";
-      card.append(empty);
+      card.append(chartReadout("Log a set with a weight to start your chart."));
+      card.draw = () => {};
       return card;
     }
 
@@ -1550,35 +1588,37 @@
       const date = localDate(new Date(now.getFullYear(), now.getMonth(), now.getDate() - (VOLUME_DAYS - 1 - i)));
       return { date, value: Math.round(volume.get(date) || 0) };
     });
-    const top = roundUp(Math.max(...days.map((day) => day.value), 1));
-    const baseline = CHART.height - CHART.bottom;
-    const toY = (value) => baseline - (value / top) * (baseline - CHART.top);
-    const activeDays = days.filter((day) => day.value > 0).length;
-    const svg = chartFrame([0, top / 2, top], toY, days[0].date, days[days.length - 1].date, `Kilograms moved per day, last ${VOLUME_DAYS} days. ${activeDays} days with lifting.`);
-
-    const slot = (CHART.width - CHART.left - CHART.right) / VOLUME_DAYS;
-    const barWidth = Math.min(slot - 2, 24);
-    const radius = Math.min(4, barWidth / 2);
-    const points = days.map((day, i) => {
-      const x = CHART.left + slot * i + slot / 2;
-      if (day.value > 0) {
-        const y = toY(day.value);
-        const left = x - barWidth / 2;
-        const right = x + barWidth / 2;
-        const r = Math.min(radius, baseline - y);
-        svg.append(svgElement("path", {
-          d: `M${left},${baseline} V${y + r} Q${left},${y} ${left + r},${y} H${right - r} Q${right},${y} ${right},${y + r} V${baseline} Z`,
-          fill: "var(--chart)",
-        }));
-      }
-      return { ...day, x };
-    });
-
-    const describeDay = (day) => `${formatDate(day.date)}: ${day.value.toLocaleString()} kg`;
     const readout = chartReadout(`Last ${VOLUME_DAYS} days. Tap a day. Weighted sets only.`);
-    addReadout(svg, readout, points, describeDay);
     const rows = days.filter((day) => day.value > 0).reverse().map((day) => [formatDate(day.date), `${day.value.toLocaleString()} kg`]);
-    card.append(svg, readout, chartTable(rows));
+    card.append(readout, chartTable(rows));
+
+    card.draw = () => drawInSlot(slot, () => {
+      const top = roundUp(Math.max(...days.map((day) => day.value), 1));
+      const baseline = CHART.height - CHART.bottom;
+      const toY = (value) => baseline - (value / top) * (baseline - CHART.top);
+      const activeDays = days.filter((day) => day.value > 0).length;
+      const svg = chartFrame([0, top / 2, top], toY, days[0].date, days[days.length - 1].date, `Kilograms moved per day, last ${VOLUME_DAYS} days. ${activeDays} days with lifting.`);
+
+      const slotWidth = (CHART.width - CHART.left - CHART.right) / VOLUME_DAYS;
+      const barWidth = Math.min(slotWidth - 2, 24);
+      const radius = Math.min(4, barWidth / 2);
+      const points = days.map((day, i) => {
+        const x = CHART.left + slotWidth * i + slotWidth / 2;
+        if (day.value > 0) {
+          const y = toY(day.value);
+          const left = x - barWidth / 2;
+          const right = x + barWidth / 2;
+          const r = Math.min(radius, baseline - y);
+          svg.append(svgElement("path", {
+            d: `M${left},${baseline} V${y + r} Q${left},${y} ${left + r},${y} H${right - r} Q${right},${y} ${right},${y + r} V${baseline} Z`,
+            fill: "var(--chart)",
+          }));
+        }
+        return { ...day, x };
+      });
+      addReadout(svg, readout, points, (day) => `${formatDate(day.date)}: ${day.value.toLocaleString()} kg`);
+      slot.append(svg);
+    });
     return card;
   }
 
@@ -1592,11 +1632,14 @@
     if (data.height) parts.push(`${data.height} cm`);
     if (latest) parts.push(`${latest.weight} kg`);
     summary.textContent = parts.length ? parts.join(" · ") : "Add your height and weight to track them here.";
-    card.append(summary);
+    const slot = document.createElement("div");
+    slot.className = "chart-slot";
+    // Holds the readout's line before the chart is drawn, so the chart is sized for the space left.
+    const readoutSpace = chartReadout("\u00a0");
+    card.append(summary, slot, readoutSpace);
 
     const weighIns = new Map(entries.map((entry) => [entry.date, entry])); // the latest per day
     const series = [...weighIns.values()].map((entry) => ({ date: entry.date, value: entry.weight }));
-    if (series.length >= 2) lineChart(series, " kg", card);
     if (entries.length > 0) {
       card.append(chartTable([...entries].reverse().map((entry) => {
         const remove = document.createElement("button");
@@ -1612,11 +1655,24 @@
     update.dataset.editBody = "";
     update.textContent = parts.length ? "UPDATE" : "ADD";
     card.append(update);
+
+    card.draw = () => {
+      const drawn = series.length >= 2 && drawInSlot(slot, () => {
+        const { svg, readout } = lineChart(series, " kg");
+        slot.append(svg);
+        readoutSpace.replaceWith(readout);
+        return true;
+      });
+      if (!drawn) readoutSpace.remove(); // no chart, so give the line back
+    };
     return card;
   }
 
+  // Runs once the screen is showing, because the charts are sized to the space they're given.
   function renderProgress(data) {
-    progressArea.replaceChildren(volumeCard(data), bodyCard(data));
+    const cards = [volumeCard(data), bodyCard(data)];
+    progressArea.replaceChildren(...cards);
+    cards.forEach((card) => card.draw());
   }
 
   function describeSet(set) {
@@ -1686,8 +1742,8 @@
       renderAppSettings(data);
       showOnly("app-settings");
     } else if (route === "progress") {
-      renderProgress(data);
       showOnly("progress");
+      renderProgress(data);
     } else {
       renderLanding(data);
       showOnly("landing");
@@ -1777,7 +1833,7 @@
     editorName.value = name || "";
     setEditorType(data.cardio.includes(name) ? "cardio" : "strength");
     updateEditor();
-    editor.showModal();
+    openPopup(editor);
   }
 
   function setEditorType(type) {
@@ -1826,7 +1882,7 @@
     editingSplit = index;
     splitNameInput.value = index === null ? "" : splits[index].name;
     updateSplitEditor();
-    splitEditor.showModal();
+    openPopup(splitEditor);
   }
 
   function updateSplitEditor() {
@@ -1841,7 +1897,7 @@
     newNicknameHint.textContent = "You'll use this name to get your logs back. The old name will lead here too.";
     newNicknameSave.textContent = "SAVE";
     newNicknameSave.disabled = false;
-    nicknameEditor.showModal();
+    openPopup(nicknameEditor);
   }
 
   // The data stays put under its hidden ID, so this only checks the name is free, then reserves it.
@@ -1936,7 +1992,7 @@
     logHistory.hidden = Boolean(setToEdit) || pastSets.length === 0;
     logDelete.hidden = !setToEdit;
     updateTick();
-    logDialog.showModal();
+    openPopup(logDialog);
   }
 
   // The last logged value, or the field's name if there isn't one.
@@ -2159,7 +2215,7 @@
     bodyHeight.value = data.height || "";
     bodyWeight.value = today ? today.weight : "";
     updateBodySave();
-    bodyEditor.showModal();
+    openPopup(bodyEditor);
   }
 
   // A blank height clears it. A blank weight just means no weigh-in today.
@@ -2257,7 +2313,7 @@
   function openPurge() {
     purgeInputs.forEach((input) => { input.value = ""; });
     updatePurge();
-    purgeEditor.showModal();
+    openPopup(purgeEditor);
   }
 
   purgeInputs.forEach((input) => {
@@ -2326,6 +2382,17 @@
     });
   }
 
+  // Opens a popup already sitting where it will end up above the keypad. If a phone thinks the
+  // box it's about to focus will be hidden by the keyboard, it shifts the whole page up, so the
+  // trick is to never put it there. Laptops have no keypad, so their popups stay at the bottom.
+  function openPopup(dialog) {
+    if (window.matchMedia("(pointer: coarse)").matches) {
+      const expected = Number(localStorage.getItem(KEYPAD_KEY)) || Math.round(window.innerHeight * 0.42);
+      document.documentElement.style.setProperty("--keypad-height", `${expected}px`);
+    }
+    dialog.showModal();
+  }
+
   // A one-time nudge to install the app, shown only in a browser tab. Android offers its own
   // install button; iPhones can only do it by hand from the Share menu.
   const INSTALL_DISMISSED_KEY = "gymTracker.installHintDismissed";
@@ -2372,12 +2439,17 @@
   updateInstallHint();
 
   // Phones don't report the keypad directly, but the visible area shrinks when it opens.
+  // Its height is remembered, so the next popup can sit above it before it even appears.
+  const KEYPAD_KEY = "gymTracker.keypadHeight";
+
   function trackKeypad() {
     const visible = window.visualViewport;
     if (!visible) return;
     const update = () => {
-      const covered = document.documentElement.clientHeight - visible.height - visible.offsetTop;
-      document.documentElement.style.setProperty("--keypad-height", `${Math.max(0, covered)}px`);
+      const covered = Math.max(0, document.documentElement.clientHeight - visible.height - visible.offsetTop);
+      document.documentElement.style.setProperty("--keypad-height", `${covered}px`);
+      if (covered > 100) localStorage.setItem(KEYPAD_KEY, Math.max(covered, Number(localStorage.getItem(KEYPAD_KEY)) || 0));
+      if (visible.offsetTop > 0 && popupOpen()) window.scrollTo(0, 0); // undo any page shift the phone makes
     };
     visible.addEventListener("resize", update);
     visible.addEventListener("scroll", update);
