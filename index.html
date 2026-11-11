@@ -322,6 +322,9 @@
   }
   .scroll-area > * { flex-shrink: 0; }
   /* Progress fills the screen with two equal cards. Each chart is drawn to fit its card. */
+  #debug-info { padding: 0 6px; font-size: 0.85rem; line-height: 1.5; white-space: pre-wrap; }
+  #debug-screen .back { position: relative; }
+
   #progress-area {
     flex: 1;
     min-height: 0;
@@ -722,7 +725,7 @@
 </main>
 
 <main id="app-settings" class="screen" hidden>
-  <h1>Settings</h1>
+  <h1 id="settings-heading">Settings</h1>
   <div class="scroll-area settings-page">
     <section>
       <h2 class="settings-heading">You</h2>
@@ -747,6 +750,13 @@
     <button id="redo-setup" class="wide-pill">Redo setup</button>
     <button id="purge-open" class="wide-pill danger">Purge history</button>
   </div>
+</main>
+
+<main id="debug-screen" class="screen" hidden>
+  <h1>Screen check</h1>
+  <pre id="debug-info"></pre>
+  <div class="spacer"></div>
+  <button class="back" data-go="settings" aria-label="Back"><svg class="icon" aria-hidden="true"><use href="#i-back"/></svg></button>
 </main>
 
 <main id="exercises" class="screen" hidden>
@@ -1853,6 +1863,9 @@
     } else if (route === "settings") {
       renderAppSettings(data);
       showOnly("app-settings");
+    } else if (route === "debug") {
+      showOnly("debug-screen");
+      showScreenCheck();
     } else if (route === "progress") {
       showOnly("progress");
       renderProgress(data);
@@ -1861,6 +1874,43 @@
       showOnly("landing");
     }
   }
+
+  // Hidden measurements for fixing layout on a particular phone. Opened by tapping the Settings
+  // heading five times. Only reads sizes, never data.
+  function showScreenCheck() {
+    const measure = (css) => {
+      const probe = document.createElement("div");
+      probe.style.cssText = `position:fixed;left:-9999px;top:0;width:1px;${css}`;
+      document.body.append(probe);
+      const size = probe.getBoundingClientRect().height;
+      probe.remove();
+      return Math.round(size);
+    };
+    const back = document.querySelector("#debug-screen .back").getBoundingClientRect();
+    const visible = window.visualViewport;
+    const lines = [
+      `installed: ${isInstalled()}`,
+      `screen: ${screen.width} x ${screen.height}`,
+      `window: ${innerWidth} x ${innerHeight}`,
+      `page: ${document.documentElement.clientWidth} x ${document.documentElement.clientHeight}`,
+      `visible: ${visible ? `${Math.round(visible.width)} x ${Math.round(visible.height)}, top ${Math.round(visible.offsetTop)}` : "n/a"}`,
+      `100vh ${measure("height:100vh")}  100dvh ${measure("height:100dvh")}  100lvh ${measure("height:100lvh")}  100svh ${measure("height:100svh")}`,
+      `safe top ${measure("height:env(safe-area-inset-top)")}  bottom ${measure("height:env(safe-area-inset-bottom)")}`,
+      `back button bottom: ${Math.round(back.bottom)}`,
+      `device pixels: ${devicePixelRatio}`,
+    ];
+    document.getElementById("debug-info").textContent = lines.join("\n");
+  }
+
+  let headingTaps = [];
+  document.getElementById("settings-heading").addEventListener("click", () => {
+    const now = Date.now();
+    headingTaps = [...headingTaps.filter((time) => now - time < 2000), now];
+    if (headingTaps.length >= 5) {
+      headingTaps = [];
+      go("debug");
+    }
+  });
 
   function go(route) {
     if (location.hash.slice(1) === route) showScreen();
@@ -2168,7 +2218,7 @@
       date: todayLocal(),
     };
     currentFields.forEach((field, i) => { set[field.key] = Number(logInputs[i].value); });
-    const note = logNote.value.trim();
+    const note = logNote.value.trim().slice(0, 100);
     if (note) set.note = note;
 
     const saved = updateData((data) => {
@@ -2183,7 +2233,7 @@
     const saved = updateData((data) => {
       const set = data.sets[currentExercise].find((past) => past.id === editingSetId);
       currentFields.forEach((field, i) => { set[field.key] = Number(logInputs[i].value); });
-      const note = logNote.value.trim();
+      const note = logNote.value.trim().slice(0, 100);
       if (note) set.note = note;
       else delete set.note;
       set.editedAt = Date.now();
@@ -2614,6 +2664,14 @@
     applyUpdateIfSafe();
   });
   window.addEventListener("online", syncNow);
+  // Charts are drawn to fit, so a rotation or window resize needs a fresh drawing.
+  let resizeTimer;
+  window.addEventListener("resize", () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      if (location.hash === "#progress" && !popupOpen()) renderProgress(loadData());
+    }, 150);
+  });
   // Not available when opened as a file or over plain http, which is fine for local testing.
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
   document.addEventListener("visibilitychange", () => {
