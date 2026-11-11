@@ -809,10 +809,13 @@
 </main>
 
 <main id="summary" class="screen" hidden>
-  <h1>Workout done</h1>
+  <h1 id="summary-title">Workout done</h1>
   <p id="summary-stats" class="summary-stats"></p>
   <div id="summary-list" class="scroll-area"></div>
-  <button class="back" data-go="" aria-label="Back"><svg class="icon" aria-hidden="true"><use href="#i-back"/></svg></button>
+  <div class="bottom-bar">
+    <button class="back" data-go="" aria-label="Back"><svg class="icon" aria-hidden="true"><use href="#i-back"/></svg></button>
+    <button id="finish-workout" class="primary" hidden>Finish workout</button>
+  </div>
 </main>
 
 <main id="exercises" class="screen" hidden>
@@ -1621,7 +1624,7 @@
     const button = document.getElementById("workout-button");
     const active = data.activeWorkout;
     button.classList.toggle("active", Boolean(active));
-    button.textContent = active ? `Finish workout · ${workoutLength(active.start)}` : "Start workout";
+    button.textContent = active ? `Workout · ${workoutLength(active.start)}` : "Start workout";
   }
 
   // Every set logged between two times, grouped by exercise in the order each was first done.
@@ -1635,16 +1638,23 @@
     return groups;
   }
 
-  async function toggleWorkout() {
-    const data = loadData();
-    const active = data.activeWorkout;
-    if (!active) {
-      if (updateData((d) => { d.activeWorkout = { id: `w-${Date.now().toString(36)}`, start: Date.now() }; }, false)) {
-        showToast("Workout started");
-        showScreen();
-      }
+  // On home, the one button starts a workout, or opens the summary so far while one is running.
+  // Finishing lives on that summary screen, so it can't happen by accident.
+  function workoutButtonTapped() {
+    if (loadData().activeWorkout) {
+      go("summary");
       return;
     }
+    if (updateData((d) => { d.activeWorkout = { id: `w-${Date.now().toString(36)}`, start: Date.now() }; }, false)) {
+      showToast("Workout started");
+      showScreen();
+    }
+  }
+
+  async function finishWorkout() {
+    const data = loadData();
+    const active = data.activeWorkout;
+    if (!active) return;
     const end = Date.now();
     if (workoutSets(data, active.start, end).size === 0) {
       if (!(await askConfirm("No sets logged in this workout. End it without saving?", { ok: "End it" }))) return;
@@ -1652,26 +1662,38 @@
         d.deleted = [...(d.deleted || []), active.id].sort();
         delete d.activeWorkout;
       }, false);
-      if (ended) showScreen();
+      if (ended) go("");
       return;
     }
     const saved = updateData((d) => {
       d.workouts = [...(d.workouts || []), { ...active, end }];
       delete d.activeWorkout;
     }, false);
-    if (saved) go("summary");
+    if (saved) showScreen(); // same screen, now showing the finished workout
   }
 
-  // The most recent finished workout: how long, how much, and each exercise in order.
+  // The running workout so far (with Finish), or else the most recent finished one:
+  // how long, how much, and each exercise in the order it was first done.
   function renderSummary(data) {
-    const workout = (data.workouts || [])[(data.workouts || []).length - 1];
+    const active = data.activeWorkout;
+    const workout = active ? { ...active, end: Date.now() } : (data.workouts || [])[(data.workouts || []).length - 1];
     const list = document.getElementById("summary-list");
+    document.getElementById("summary-title").textContent = active ? "Workout so far" : "Workout done";
+    document.getElementById("finish-workout").hidden = !active;
     if (!workout) {
       document.getElementById("summary-stats").textContent = "No finished workouts yet.";
       list.replaceChildren();
       return;
     }
     const groups = workoutSets(data, workout.start, workout.end);
+    if (groups.size === 0) {
+      document.getElementById("summary-stats").textContent = `${workoutLength(workout.start, workout.end)} · no sets yet`;
+      const hint = document.createElement("p");
+      hint.className = "hint";
+      hint.textContent = "Sets you log now show up here, in the order you do them.";
+      list.replaceChildren(hint);
+      return;
+    }
     const sets = [...groups.values()].flat();
     const kg = Math.round(sets.reduce((sum, set) => sum + (set.reps && set.weight ? set.reps * set.weight : 0), 0));
     const parts = [workoutLength(workout.start, workout.end), `${sets.length} ${sets.length === 1 ? "set" : "sets"}`];
@@ -1690,9 +1712,11 @@
     }));
   }
 
-  document.getElementById("workout-button").addEventListener("click", toggleWorkout);
+  document.getElementById("workout-button").addEventListener("click", workoutButtonTapped);
+  document.getElementById("finish-workout").addEventListener("click", finishWorkout);
   setInterval(() => {
     if (!document.getElementById("landing").hidden) renderWorkoutButton();
+    if (!document.getElementById("summary").hidden && loadData().activeWorkout) renderSummary(loadData());
   }, 30000);
 
   // Swipe a row left to delete it. Up-and-down movement is left to the list's scrolling, and a
