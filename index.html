@@ -104,7 +104,9 @@
      Measured from real screenshots: text at 92pt blurs, anything from 111pt down is sharp.
      This puts the first line of text at about 110pt. */
   @media (display-mode: standalone) {
-    .screen { padding-top: calc(max(var(--gap), env(safe-area-inset-top)) + 34px); }
+    /* --status-gap covers phones that report no safe area while still drawing the status bar
+       over the page (measured on an iPhone: page starts at the very top, safe area 0). */
+    .screen { padding-top: calc(max(var(--gap), env(safe-area-inset-top)) + var(--status-gap, 0px) + 34px); }
   }
 
   h1 {
@@ -324,6 +326,15 @@
   /* Progress fills the screen with two equal cards. Each chart is drawn to fit its card. */
   #debug-info { padding: 0 6px; font-size: 0.85rem; line-height: 1.5; white-space: pre-wrap; }
   #debug-screen .back { position: relative; }
+  /* Drawn in the strip below the app's reported height, to find out if taps work there. */
+  #strip-test {
+    position: fixed;
+    left: var(--gap);
+    right: var(--gap);
+    top: calc(100vh - 52px);
+    height: 44px;
+    z-index: 5;
+  }
 
   #progress-area {
     flex: 1;
@@ -755,6 +766,7 @@
 <main id="debug-screen" class="screen" hidden>
   <h1>Screen check</h1>
   <pre id="debug-info"></pre>
+  <button id="strip-test" hidden>Can you see this? Tap it.</button>
   <div class="spacer"></div>
   <button class="back" data-go="settings" aria-label="Back"><svg class="icon" aria-hidden="true"><use href="#i-back"/></svg></button>
 </main>
@@ -1898,9 +1910,19 @@
       `safe top ${measure("height:env(safe-area-inset-top)")}  bottom ${measure("height:env(safe-area-inset-bottom)")}`,
       `back button bottom: ${Math.round(back.bottom)}`,
       `device pixels: ${devicePixelRatio}`,
+      `status gap used: ${getComputedStyle(document.documentElement).getPropertyValue("--status-gap") || "0px"}`,
+      `bottom strip: ${stripResult}`,
     ];
     document.getElementById("debug-info").textContent = lines.join("\n");
+    document.getElementById("strip-test").hidden = measure("height:100vh") <= innerHeight + 20;
   }
+
+  let stripResult = "not tapped";
+  document.getElementById("strip-test").addEventListener("click", () => {
+    stripResult = "TAPPED, taps work there";
+    document.getElementById("strip-test").textContent = "Tapped! Screenshot this page.";
+    showScreenCheck();
+  });
 
   let headingTaps = [];
   document.getElementById("settings-heading").addEventListener("click", () => {
@@ -2614,6 +2636,24 @@
   });
 
   updateInstallHint();
+
+  // Some installed iPhones report a safe area of 0 yet still draw the status bar over the top of
+  // the page, and give the page less height than the screen. The missing height is the status
+  // bar, so it's used as top padding there. Only when installed, upright, and the safe area is 0.
+  function fitStatusBar() {
+    const probe = document.createElement("div");
+    probe.style.cssText = "position:fixed;left:-9999px;top:0;width:1px;height:env(safe-area-inset-top)";
+    document.body.append(probe);
+    const safeTop = probe.getBoundingClientRect().height;
+    probe.remove();
+    const upright = innerHeight > innerWidth;
+    const missing = upright ? Math.max(screen.width, screen.height) - innerHeight : 0;
+    const gap = isInstalled() && safeTop === 0 && missing > 20 && missing < 120 ? missing : 0;
+    document.documentElement.style.setProperty("--status-gap", `${gap}px`);
+  }
+
+  fitStatusBar();
+  window.addEventListener("resize", fitStatusBar);
 
   // Phones don't report the keypad directly, but the visible area shrinks when it opens.
   // Its height is remembered, so the next popup can sit above it before it even appears.
