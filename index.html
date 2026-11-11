@@ -342,6 +342,9 @@
   #progress-area .chart-slot svg { height: 100%; margin-top: 0; }
   #progress-area details { flex: 0 1 auto; min-height: 0; overflow-y: auto; }
   #progress-area .wide-pill { flex: 0 0 auto; min-height: 48px; }
+  .metric-line { flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 8px; }
+  .metric-line .metric-row { margin-top: 0; }
+  .metric-button { flex-shrink: 0; min-height: 44px; padding: 0 16px; font-size: 0.95rem; }
   /* Opening "Show numbers" swaps the chart for the table, so the card never grows. */
   #progress-area .chart-card:has(details[open]) .chart-slot { display: none; }
   #progress-area .chart-card:has(details[open]) details { flex: 1 1 0; }
@@ -1633,7 +1636,7 @@
   function drawInSlot(slot, draw) {
     const width = slot.clientWidth;
     const height = slot.clientHeight;
-    if (width < 120 || height < 70) return null; // too small to read: the numbers table still has it
+    if (width < 120 || height < 54) return null; // too small to read: the numbers table still has it
     const normal = { width: CHART.width, height: CHART.height };
     Object.assign(CHART, { width, height });
     try {
@@ -1748,12 +1751,20 @@
     const parts = [];
     if (data.height) parts.push(`${data.height} cm`);
     if (latest) parts.push(`${latest.weight} kg`);
-    summary.textContent = parts.length ? parts.join(" · ") : "Add your height and weight to track them here.";
+    summary.textContent = parts.length ? parts.join(" · ") : "Add your height and weight.";
+    // UPDATE shares the summary's line, leaving the rest of the card for the chart.
+    const update = document.createElement("button");
+    update.className = "metric-button";
+    update.dataset.editBody = "";
+    update.textContent = parts.length ? "UPDATE" : "ADD";
+    const line = document.createElement("div");
+    line.className = "metric-line";
+    line.append(summary, update);
     const slot = document.createElement("div");
     slot.className = "chart-slot";
     // Holds the readout's line before the chart is drawn, so the chart is sized for the space left.
     const readoutSpace = chartReadout("\u00a0");
-    card.append(summary, slot, readoutSpace);
+    card.append(line, slot, readoutSpace);
 
     // One point per day: the average of that day's weigh-ins.
     const byDay = new Map();
@@ -1771,12 +1782,6 @@
         return [`${formatDate(entry.date)}, ${time}`, `${entry.weight} kg`, remove];
       })));
     }
-    const update = document.createElement("button");
-    update.className = "wide-pill";
-    update.dataset.editBody = "";
-    update.textContent = parts.length ? "UPDATE" : "ADD";
-    card.append(update);
-
     card.draw = () => {
       const drawn = series.length >= 2 && drawInSlot(slot, () => {
         const { svg, readout } = lineChart(series, " kg");
@@ -1784,7 +1789,11 @@
         readoutSpace.replaceWith(readout);
         return true;
       });
-      if (!drawn) readoutSpace.remove(); // no chart, so give the line back
+      if (drawn) return;
+      // Say why there's no chart rather than leaving a gap.
+      if (entries.length === 0) readoutSpace.remove();
+      else if (series.length < 2) readoutSpace.textContent = "Weigh in on another day to see a chart.";
+      else readoutSpace.textContent = "No room for the chart here. Show numbers lists every weigh-in.";
     };
     return card;
   }
@@ -2569,6 +2578,17 @@
     }
     dialog.showModal();
   }
+
+  // Tapping from one box to another in a popup makes iPhones scroll the page to "show" the box,
+  // even though it's already in view, so the page twitches. Focusing it ourselves with
+  // preventScroll moves the cursor without that scroll. Done on touchstart, which still counts
+  // as a tap, so the keyboard stays up.
+  document.addEventListener("touchstart", (event) => {
+    const box = event.target.closest && event.target.closest("dialog input");
+    if (!box || box === document.activeElement) return;
+    event.preventDefault();
+    box.focus({ preventScroll: true });
+  }, { passive: false });
 
   // A one-time nudge to install the app, shown only in a browser tab. Android offers its own
   // install button; iPhones can only do it by hand from the Share menu.
