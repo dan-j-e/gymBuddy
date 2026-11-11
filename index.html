@@ -549,6 +549,7 @@
   }
   #log input { grid-column: span 3; }
   #log form.three-fields input { grid-column: span 2; }
+  #log form.one-field input { grid-column: 1 / -1; }
   #log #log-note { grid-column: 1 / -1; }
 
   #log input {
@@ -593,6 +594,8 @@
     background: var(--line);
     color: var(--text);
   }
+  .kind-toggle { grid-template-columns: 1fr 1fr 1fr; }
+  .kind-toggle button { height: 48px; padding: 0 6px; }
   .toggle button.chosen {
     background: var(--sky);
     color: var(--ink);
@@ -866,9 +869,13 @@
 <dialog id="editor" class="name-editor">
   <form>
     <input id="editor-name" type="text" placeholder="Exercise name" aria-label="Exercise name" maxlength="40" autocomplete="off">
-    <div class="toggle">
-      <button type="button" data-type="strength">reps + kg</button>
-      <button type="button" data-type="cardio">cardio</button>
+    <div class="toggle kind-toggle">
+      <button type="button" data-type="strength">Reps + kg</button>
+      <button type="button" data-type="reps">Reps only</button>
+      <button type="button" data-type="height">Reps + cm</button>
+      <button type="button" data-type="time">Time</button>
+      <button type="button" data-type="distance">Distance</button>
+      <button type="button" data-type="cardio">Treadmill</button>
     </div>
     <p id="editor-hint"></p>
     <button id="editor-save" class="primary">Save</button>
@@ -893,8 +900,8 @@
 
 <dialog id="body-editor" class="name-editor">
   <form>
+    <input id="body-weight" type="text" inputmode="decimal" placeholder="Weight in kg" aria-label="Body weight in kilograms" autocomplete="off" autofocus>
     <input id="body-height" type="text" inputmode="decimal" placeholder="Height in cm" aria-label="Height in centimetres" autocomplete="off">
-    <input id="body-weight" type="text" inputmode="decimal" placeholder="Weight in kg" aria-label="Body weight in kilograms" autocomplete="off">
     <p>Both optional. Each weight is added, and the chart uses each day's average.</p>
     <button id="body-save" class="primary">Save</button>
   </form>
@@ -949,6 +956,52 @@
     { key: "speed", placeholder: "km/h", unit: " km/h", label: "Speed in km/h", min: 0.1 },
     { key: "minutes", placeholder: "mins", unit: " mins", label: "Time in minutes", min: 1, whole: true },
   ];
+  const REPS_FIELD = STRENGTH_FIELDS[0];
+  const HEIGHT_FIELDS = [REPS_FIELD, { key: "height", placeholder: "cm", unit: " cm", label: "Height in cm", min: 1 }];
+  // Blank minutes or seconds count as 0, but the two together must add up to something.
+  const TIME_FIELDS = [
+    { key: "minutes", placeholder: "mins", unit: " min", label: "Minutes", min: 0, whole: true, blankIsZero: true },
+    { key: "seconds", placeholder: "secs", unit: " s", label: "Seconds", min: 0, max: 59, whole: true, blankIsZero: true },
+  ];
+  // `optional` boxes can stay empty and then aren't saved at all, so nothing shows "0 mins".
+  const DISTANCE_FIELDS = [
+    { key: "km", placeholder: "km", unit: " km", label: "Distance in km", min: 0.01 },
+    { key: "minutes", placeholder: "mins", unit: " mins", label: "Time in minutes (optional)", min: 1, whole: true, optional: true },
+  ];
+
+  // Every kind of exercise: what the log popup asks for, and what its History chart tracks.
+  // Strength is the default. Cardio lives in data.cardio (as it always has), the rest in data.kinds.
+  const KINDS = {
+    strength: { fields: STRENGTH_FIELDS },
+    reps: { fields: [REPS_FIELD], chart: ["Most reps per day", " reps", (set) => set.reps, Math.max] },
+    height: { fields: HEIGHT_FIELDS, chart: ["Highest per day", " cm", (set) => set.height, Math.max] },
+    time: {
+      fields: TIME_FIELDS,
+      valid: (set) => set.minutes * 60 + set.seconds > 0,
+      chart: ["Longest per day", " s", (set) => set.minutes * 60 + set.seconds, Math.max],
+    },
+    distance: { fields: DISTANCE_FIELDS, chart: ["Distance per day", " km", (set) => set.km, (a, b) => Math.round((a + b) * 100) / 100] },
+    cardio: { fields: CARDIO_FIELDS },
+  };
+
+  // The small tag on a split settings row (strength has none).
+  const KIND_LABELS = { reps: "reps only", height: "reps + cm", time: "time", distance: "distance", cardio: "treadmill" };
+
+  // A set's own kind, from the boxes it was saved with, so old sets still read right
+  // even if their exercise later changes kind.
+  function setKind(set) {
+    if ("incline" in set) return "cardio";
+    if ("height" in set) return "height";
+    if ("seconds" in set) return "time";
+    if ("km" in set) return "distance";
+    if ("weight" in set) return "strength";
+    return "reps";
+  }
+
+  function exerciseKind(data, name) {
+    if (data.cardio.includes(name)) return "cardio";
+    return (data.kinds && data.kinds[name]) || "strength";
+  }
 
   const SPLIT_COLOURS = ["--coral", "--periwinkle", "--butter", "--sky", "--sage"];
 
@@ -1012,6 +1065,7 @@
       delete data.sets[oldName];
     }
     data.cardio = data.cardio.filter((name) => name !== oldName);
+    if (data.kinds) delete data.kinds[oldName];
   }
 
   // Oldest first: by date, then by when it was logged (the id starts with the time).
@@ -1027,6 +1081,10 @@
   function setExerciseType(data, name, type) {
     data.cardio = data.cardio.filter((cardioName) => cardioName !== name);
     if (type === "cardio") data.cardio.push(name);
+    data.kinds = data.kinds || {};
+    delete data.kinds[name];
+    if (type !== "cardio" && type !== "strength") data.kinds[name] = type;
+    if (Object.keys(data.kinds).length === 0) delete data.kinds;
   }
 
   function exerciseExists(data, name) {
@@ -1414,6 +1472,7 @@
 
   let currentExercise = null;
   let currentFields = STRENGTH_FIELDS;
+  let currentKind = "strength";
   let currentSplit = null;
   let reordering = false; // the exercise screen is showing move arrows
   let editingSplit = null; // null means the split popup is adding a new split
@@ -1533,9 +1592,10 @@
       const label = document.createElement("span");
       label.textContent = name;
       row.append(label);
-      if (data.cardio.includes(name)) {
+      const kind = exerciseKind(data, name);
+      if (kind !== "strength") {
         const tag = document.createElement("small");
-        tag.textContent = "cardio";
+        tag.textContent = KIND_LABELS[kind];
         row.append(tag);
       }
       const line = document.createElement("div");
@@ -1572,7 +1632,7 @@
     document.getElementById("history-title").textContent = name;
     document.getElementById("history-back").dataset.go = index;
     const sets = data.sets[name] || [];
-    const chart = exerciseChart(sets);
+    const chart = exerciseChart(sets, exerciseKind(data, name));
     if (chart.length === 0 && sets.length > 0) {
       const wait = document.createElement("p");
       wait.className = "hint";
@@ -1870,7 +1930,7 @@
   }
 
   // A value over time. The axis fits the data rather than starting at 0, so small gains show.
-  function lineChart(entries, unit) {
+  function lineChart(entries, unit, { endLabel: labelEnd = true } = {}) {
     const values = entries.map((entry) => entry.value);
     const low = Math.min(...values);
     const high = Math.max(...values);
@@ -1900,9 +1960,11 @@
     }));
     const end = points[points.length - 1];
     svg.append(svgElement("circle", { cx: end.x, cy: end.y, r: 5, fill: "var(--chart)", stroke: "var(--card)", "stroke-width": 2 }));
-    const endLabel = svgElement("text", { class: "end-label", x: end.x, y: Math.max(end.y - 10, 11), "text-anchor": "end" });
-    endLabel.textContent = `${latest.value}${unit}`;
-    svg.append(endLabel);
+    if (labelEnd) {
+      const endLabel = svgElement("text", { class: "end-label", x: end.x, y: Math.max(end.y - 10, 11), "text-anchor": "end" });
+      endLabel.textContent = `${latest.value}${unit}`;
+      svg.append(endLabel);
+    }
 
     const describePoint = (point) => `${formatDate(point.date)}: ${point.value}${unit}`;
     const readout = chartReadout(describePoint(end));
@@ -1936,8 +1998,23 @@
 
   // The number that best shows progress: distance for cardio, the heaviest set for
   // strength, or the most reps if it's all bodyweight. Needs two different days to draw a line.
-  function exerciseChart(sets) {
+  function exerciseChart(sets, kind) {
     const byDay = new Map();
+    const own = KINDS[kind].chart;
+    if (own) {
+      const [title, unit, value, combine] = own;
+      for (const set of sets) {
+        if (setKind(set) !== kind) continue;
+        const known = byDay.get(set.date);
+        byDay.set(set.date, known === undefined ? value(set) : combine(known, value(set)));
+      }
+      const entries = [...byDay].map(([date, total]) => ({ date, value: total })).sort((a, b) => a.date.localeCompare(b.date));
+      if (entries.length < 2) return [];
+      const card = chartCard(title);
+      const { svg, readout } = lineChart(entries, unit);
+      card.append(svg, readout);
+      return [card];
+    }
     const usable = sets.filter((set) => "reps" in set || ("speed" in set && "minutes" in set));
     const isCardio = usable.some((set) => "speed" in set);
     const usesWeight = usable.some((set) => set.weight > 0);
@@ -2062,7 +2139,8 @@
     }
     card.draw = () => {
       const drawn = series.length >= 2 && drawInSlot(slot, () => {
-        const { svg, readout } = lineChart(series, " kg");
+        // The latest weight is already on the card's top line, so the chart doesn't repeat it.
+        const { svg, readout } = lineChart(series, " kg", { endLabel: false });
         slot.append(svg);
         readoutSpace.replaceWith(readout);
         return true;
@@ -2084,8 +2162,17 @@
   }
 
   function describeSet(set) {
-    const fields = "incline" in set ? CARDIO_FIELDS : STRENGTH_FIELDS;
-    return fields.filter((field) => field.key in set).map((field) => fieldHint(field, set)).join(" · ");
+    const kind = setKind(set);
+    if (kind === "time") return formatSeconds(set.minutes * 60 + set.seconds);
+    return KINDS[kind].fields.filter((field) => field.key in set).map((field) => fieldHint(field, set)).join(" · ");
+  }
+
+  // 90 -> "1 min 30 s", 45 -> "45 s".
+  function formatSeconds(total) {
+    const minutes = Math.floor(total / 60);
+    const seconds = total % 60;
+    if (!minutes) return `${seconds} s`;
+    return `${minutes} min${seconds ? ` ${seconds} s` : ""}`;
   }
 
   // Built from the parts, because new Date("2026-11-02") would read it as UTC.
@@ -2284,7 +2371,7 @@
     const data = loadData();
     editingName = name;
     editorName.value = name || "";
-    setEditorType(data.cardio.includes(name) ? "cardio" : "strength");
+    setEditorType(exerciseKind(data, name));
     updateEditor();
     openPopup(editor);
   }
@@ -2307,7 +2394,7 @@
       hint = "Renames it in every split.";
     } else if (exerciseExists(data, name)) {
       hint = "Already exists, so it keeps its logged sets.";
-      setEditorType(data.cardio.includes(name) ? "cardio" : "strength");
+      setEditorType(exerciseKind(data, name));
     }
     editorHint.textContent = hint;
     editorSave.disabled = !name || alreadyHere;
@@ -2437,13 +2524,14 @@
     const data = loadData();
     const pastSets = data.sets[exercise] || [];
     const lastSet = pastSets[pastSets.length - 1] || {};
-    const isCardio = setToEdit ? "incline" in setToEdit : data.cardio.includes(exercise);
-    const strengthFields = data.weightFirst ? [...STRENGTH_FIELDS].reverse() : STRENGTH_FIELDS;
+    const kind = setToEdit ? setKind(setToEdit) : exerciseKind(data, exercise);
     currentExercise = exercise;
-    currentFields = isCardio ? CARDIO_FIELDS : strengthFields;
+    currentKind = kind;
+    currentFields = kind === "strength" && data.weightFirst ? [...STRENGTH_FIELDS].reverse() : KINDS[kind].fields;
     editingSetId = setToEdit && setToEdit.id;
     logForm.reset();
     logForm.classList.toggle("three-fields", currentFields.length === 3);
+    logForm.classList.toggle("one-field", currentFields.length === 1);
     logInputs.forEach((input, i) => {
       const field = currentFields[i];
       input.hidden = !field;
@@ -2455,7 +2543,7 @@
     });
     // Repeat copies the last set's numbers into the boxes, ready to check and save.
     // Always shown, greyed out when there's no earlier set to copy.
-    logRepeat.disabled = Boolean(setToEdit) || !lastSet.id || ("incline" in lastSet) !== isCardio;
+    logRepeat.disabled = Boolean(setToEdit) || !lastSet.id || setKind(lastSet) !== kind;
     // The symbol is the button; the label says what it repeats for screen readers and long-press.
     const repeatLabel = logRepeat.disabled ? "Nothing to repeat yet" : `Repeat last: ${describeSet(lastSet)}`;
     logRepeat.setAttribute("aria-label", repeatLabel);
@@ -2487,11 +2575,24 @@
   }
 
   function isValidSet() {
-    return currentFields.every((field, i) => {
+    const boxesOk = currentFields.every((field, i) => {
       const value = logInputs[i].value;
-      if (value === "") return Boolean(field.blankIsZero);
-      return Number.isFinite(Number(value)) && Number(value) >= field.min;
+      if (value === "") return Boolean(field.blankIsZero || field.optional);
+      const number = Number(value);
+      return Number.isFinite(number) && number >= field.min && !(number > field.max);
     });
+    const check = KINDS[currentKind].valid;
+    return boxesOk && (!check || check(setFromBoxes({})));
+  }
+
+  // Copies the boxes onto a set. A blank optional box is left off the set altogether.
+  function setFromBoxes(set) {
+    currentFields.forEach((field, i) => {
+      const value = logInputs[i].value;
+      if (value === "" && field.optional) delete set[field.key];
+      else set[field.key] = Number(value);
+    });
+    return set;
   }
 
   function updateTick() {
@@ -2518,7 +2619,7 @@
       id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
       date: todayLocal(),
     };
-    currentFields.forEach((field, i) => { set[field.key] = Number(logInputs[i].value); });
+    setFromBoxes(set);
     const note = logNote.value.trim().slice(0, 100);
     if (note) set.note = note;
 
@@ -2545,7 +2646,7 @@
   function saveEditedSet() {
     const saved = updateData((data) => {
       const set = data.sets[currentExercise].find((past) => past.id === editingSetId);
-      currentFields.forEach((field, i) => { set[field.key] = Number(logInputs[i].value); });
+      setFromBoxes(set);
       const note = logNote.value.trim().slice(0, 100);
       if (note) set.note = note;
       else delete set.note;
