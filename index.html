@@ -704,6 +704,18 @@
   .primary, .wide-pill, .back, .row, .bubble, .move, .toggle button, #reorder-toggle, #install-go, #install-dismiss,
   #log input, .setup-form input, .name-editor input { border-radius: 8px; }
   .edit-row small, .set-date, .chart-card svg text, .chart-title, .chart-readout, .hint { font-family: inherit; }
+  /* Variation tags: a row of small chips that scrolls sideways if there are many. */
+  .tag-row { grid-column: 1 / -1; display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; flex-shrink: 0; }
+  .tag-row::-webkit-scrollbar { display: none; }
+  .tag-row[hidden] { display: none; }
+  .tag-row button {
+    flex: 0 0 auto; min-height: 36px; padding: 0 14px; border-radius: 18px;
+    border: 1px solid var(--line); background: none; color: var(--text); font-size: 0.85rem; font-weight: 500;
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .tag-row button.chosen { background: var(--text); color: var(--bg); border-color: var(--text); }
+  .tag-row button .icon { width: 14px; height: 14px; }
+  #history-tags { margin-bottom: 4px; }
 </style>
 </head>
 <body>
@@ -846,6 +858,7 @@
 <main id="history" class="screen" hidden>
   <h1 id="history-title"></h1>
   <div class="scroll-area">
+    <div id="history-tags" class="tag-row" aria-label="Variation"></div>
     <div id="history-chart"></div>
     <p id="history-hint" class="hint section-label">Tap a set to change or delete it.</p>
     <div id="history-list"></div>
@@ -855,6 +868,7 @@
 
 <dialog id="log">
   <form>
+    <div id="log-tags" class="tag-row" aria-label="Variation"></div>
     <input type="text" autocomplete="off" autofocus>
     <input type="text" autocomplete="off">
     <input type="text" autocomplete="off" hidden>
@@ -863,6 +877,14 @@
     <button id="log-history" type="button">History</button>
     <button id="log-delete" type="button">Delete</button>
     <button id="tick" class="primary" aria-label="Save set" disabled><svg class="icon" aria-hidden="true"><use href="#i-check"/></svg></button>
+  </form>
+</dialog>
+
+<dialog id="tag-editor" class="name-editor">
+  <form>
+    <input id="tag-name" type="text" placeholder="New tag, e.g. incline" aria-label="Tag name" maxlength="20" autocomplete="off">
+    <p>Sets with a tag still count for this exercise, but are only compared with each other.</p>
+    <button id="tag-save" class="primary" disabled>Add tag</button>
   </form>
 </dialog>
 
@@ -877,6 +899,7 @@
       <button type="button" data-type="distance">Distance</button>
       <button type="button" data-type="cardio">Treadmill</button>
     </div>
+    <div id="editor-tags" class="tag-row" hidden></div>
     <p id="editor-hint"></p>
     <button id="editor-save" class="primary">Save</button>
   </form>
@@ -1066,6 +1089,10 @@
     }
     data.cardio = data.cardio.filter((name) => name !== oldName);
     if (data.kinds) delete data.kinds[oldName];
+    if (data.tags && data.tags[oldName]) {
+      data.tags[newName] = [...new Set([...(data.tags[newName] || []), ...data.tags[oldName]])];
+      delete data.tags[oldName];
+    }
   }
 
   // Oldest first: by date, then by when it was logged (the id starts with the time).
@@ -1390,7 +1417,7 @@
   }
 
   function popupOpen() {
-    return [logDialog, editor, splitEditor, nicknameEditor, bodyEditor, purgeEditor, confirmBox].some((dialog) => dialog.open);
+    return [logDialog, tagEditor, editor, splitEditor, nicknameEditor, bodyEditor, purgeEditor, confirmBox].some((dialog) => dialog.open);
   }
 
   // The app's own yes/no box, matching its look. Resolves true for OK, false for anything else.
@@ -1464,6 +1491,16 @@
   const logDelete = document.getElementById("log-delete");
   const logDialog = document.getElementById("log");
   const logForm = logDialog.querySelector("form");
+  const logTags = document.getElementById("log-tags");
+  const historyTags = document.getElementById("history-tags");
+  const tagEditor = document.getElementById("tag-editor");
+  const tagName = document.getElementById("tag-name");
+  const tagSave = document.getElementById("tag-save");
+  const editorTags = document.getElementById("editor-tags");
+  // The tag picked in the log popup ("" for none), and the one History is showing.
+  let currentTag = "";
+  let historyTag = "";
+  let historyTagFor = null;
   const logInputs = [...logForm.querySelectorAll("input:not(#log-note)")];
   const logNote = document.getElementById("log-note");
   const logRepeat = document.getElementById("log-repeat");
@@ -1631,7 +1668,17 @@
   function renderHistory(data, name, index) {
     document.getElementById("history-title").textContent = name;
     document.getElementById("history-back").dataset.go = index;
-    const sets = data.sets[name] || [];
+    const allSets = data.sets[name] || [];
+    // With tagged sets, chips pick one variation; the chart and list show only that one.
+    const groups = [...new Set(allSets.map((set) => set.tag || ""))];
+    if (historyTagFor !== name || !groups.includes(historyTag)) {
+      historyTag = allSets.length ? allSets[allSets.length - 1].tag || "" : "";
+      historyTagFor = name;
+    }
+    const tagged = groups.some(Boolean);
+    historyTags.hidden = !tagged;
+    historyTags.replaceChildren(...(tagged ? groups.sort().map((tag) => tagChip(tag || "No tag", tag === historyTag, { historyTag: tag })) : []));
+    const sets = tagged ? allSets.filter((set) => (set.tag || "") === historyTag) : allSets;
     const chart = exerciseChart(sets, exerciseKind(data, name));
     if (chart.length === 0 && sets.length > 0) {
       const wait = document.createElement("p");
@@ -1765,7 +1812,7 @@
       const heading = document.createElement("h2");
       heading.textContent = `${i + 1}. ${name}`;
       const detail = document.createElement("p");
-      detail.textContent = exerciseSets.map(describeSet).join("\n");
+      detail.textContent = exerciseSets.map((set) => `${set.tag ? `${set.tag} · ` : ""}${describeSet(set)}`).join("\n");
       detail.style.whiteSpace = "pre-line";
       item.append(heading, detail);
       return item;
@@ -2192,6 +2239,7 @@
     const split = data.splits && splitRoute && data.splits[splitRoute[1]];
 
     // The back gesture shouldn't leave a popup floating over another screen.
+    tagEditor.close();
     logDialog.close();
     editor.close();
     splitEditor.close();
@@ -2372,9 +2420,34 @@
     editingName = name;
     editorName.value = name || "";
     setEditorType(exerciseKind(data, name));
+    renderEditorTags();
     updateEditor();
     openPopup(editor);
   }
+
+  // An exercise's tags, each with a cross to remove it. Sets keep their tag either way.
+  function renderEditorTags() {
+    const tags = editingName === null ? [] : exerciseTags(loadData(), editingName);
+    editorTags.hidden = tags.length === 0;
+    editorTags.replaceChildren(...tags.map((tag) => {
+      const chip = tagChip(tag, false, { removeTag: tag });
+      chip.append(icon("close"));
+      chip.setAttribute("aria-label", `Remove tag ${tag}`);
+      return chip;
+    }));
+  }
+
+  editorTags.addEventListener("click", (event) => {
+    const chip = event.target.closest("button");
+    if (!chip) return;
+    const exercise = editingName;
+    updateData((data) => {
+      data.tags[exercise] = exerciseTags(data, exercise).filter((tag) => tag !== chip.dataset.removeTag);
+      if (data.tags[exercise].length === 0) delete data.tags[exercise];
+      if (Object.keys(data.tags).length === 0) delete data.tags;
+    });
+    renderEditorTags();
+  });
 
   function setEditorType(type) {
     editorType = type;
@@ -2536,18 +2609,16 @@
       const field = currentFields[i];
       input.hidden = !field;
       if (!field) return;
-      input.placeholder = fieldHint(field, setToEdit ? {} : lastSet);
       input.setAttribute("aria-label", field.label);
       input.inputMode = field.whole ? "numeric" : "decimal";
       if (setToEdit && field.key in setToEdit) input.value = setToEdit[field.key];
     });
-    // Repeat copies the last set's numbers into the boxes, ready to check and save.
-    // Always shown, greyed out when there's no earlier set to copy.
-    logRepeat.disabled = Boolean(setToEdit) || !lastSet.id || setKind(lastSet) !== kind;
-    // The symbol is the button; the label says what it repeats for screen readers and long-press.
-    const repeatLabel = logRepeat.disabled ? "Nothing to repeat yet" : `Repeat last: ${describeSet(lastSet)}`;
-    logRepeat.setAttribute("aria-label", repeatLabel);
-    logRepeat.title = repeatLabel;
+    // The last tag used on this exercise is picked again, if it still exists.
+    const tags = exerciseTags(data, exercise);
+    const startTag = setToEdit ? setToEdit.tag : lastSet.tag;
+    currentTag = startTag && (tags.includes(startTag) || setToEdit) ? startTag : "";
+    renderLogTags();
+    refreshLogHints();
     logNote.value = (setToEdit && setToEdit.note) || "";
     // Editing a past set comes from History, so Delete takes History's place.
     logHistory.hidden = Boolean(setToEdit);
@@ -2555,6 +2626,101 @@
     logDelete.hidden = !setToEdit;
     updateTick();
   }
+
+  function exerciseTags(data, exercise) {
+    return (data.tags && data.tags[exercise]) || [];
+  }
+
+  // The newest set to compare with: same kind and same tag, since a variation is only
+  // compared with itself.
+  function lastSetLike(exercise) {
+    const pastSets = loadData().sets[exercise] || [];
+    for (let i = pastSets.length - 1; i >= 0; i--) {
+      const set = pastSets[i];
+      if (setKind(set) === currentKind && (set.tag || "") === currentTag) return set;
+    }
+    return null;
+  }
+
+  // The hints in the boxes and the relog button follow the chosen tag.
+  function refreshLogHints() {
+    const last = editingSetId ? null : lastSetLike(currentExercise);
+    currentFields.forEach((field, i) => { logInputs[i].placeholder = fieldHint(field, last || {}); });
+    // Repeat copies that set's numbers into the boxes, ready to check and save.
+    // Always shown, greyed out when there's no earlier set to copy.
+    logRepeat.disabled = !last;
+    // The symbol is the button; the label says what it repeats for screen readers and long-press.
+    const repeatLabel = last ? `Repeat last: ${describeSet(last)}` : "Nothing to repeat yet";
+    logRepeat.setAttribute("aria-label", repeatLabel);
+    logRepeat.title = repeatLabel;
+  }
+
+  function tagChip(label, chosen, data) {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.textContent = label;
+    chip.classList.toggle("chosen", chosen);
+    Object.assign(chip.dataset, data);
+    return chip;
+  }
+
+  // [No tag] [INCLINE] [PAUSED] [+ Tag]. A set being edited keeps its tag even if it's since been removed.
+  function renderLogTags() {
+    const tags = exerciseTags(loadData(), currentExercise);
+    const shown = currentTag && !tags.includes(currentTag) ? [...tags, currentTag] : tags;
+    logTags.replaceChildren(
+      tagChip("No tag", currentTag === "", { logTag: "" }),
+      ...shown.map((tag) => tagChip(tag, tag === currentTag, { logTag: tag })),
+      tagChip("+ Tag", false, { newTag: "" }),
+    );
+  }
+
+  function chipTapped(chip) {
+    if (chip.dataset.newTag !== undefined) {
+      tagName.value = "";
+      tagSave.disabled = true;
+      openPopup(tagEditor);
+      return;
+    }
+    currentTag = chip.dataset.logTag;
+    renderLogTags();
+    refreshLogHints();
+  }
+
+  // Chips are picked on touchstart, with the default stopped, so the keypad stays up:
+  // a normal tap would take focus off the box and drop the keyboard. Mouse clicks still work.
+  logTags.addEventListener("touchstart", (event) => {
+    const chip = event.target.closest("button");
+    if (!chip) return;
+    event.preventDefault();
+    chipTapped(chip);
+  }, { passive: false });
+  logTags.addEventListener("click", (event) => {
+    const chip = event.target.closest("button");
+    if (chip) chipTapped(chip);
+  });
+
+  tagName.addEventListener("input", () => { tagSave.disabled = !cleanName(tagName.value); });
+  tagEditor.querySelector("form").addEventListener("submit", (event) => {
+    event.preventDefault();
+    const name = cleanName(tagName.value);
+    if (!name) return;
+    const exercise = currentExercise;
+    const saved = updateData((data) => {
+      data.tags = data.tags || {};
+      const tags = data.tags[exercise] || [];
+      if (!tags.includes(name)) data.tags[exercise] = [...tags, name];
+    });
+    tagEditor.close();
+    if (!saved) return;
+    currentTag = name;
+    renderLogTags();
+    refreshLogHints();
+  });
+  // Back to the first box, keyboard up, whether the tag was added or not.
+  tagEditor.addEventListener("close", () => {
+    if (logDialog.open) logInputs[0].focus({ preventScroll: true });
+  });
 
   // The last logged value, or the field's name if there isn't one.
   function fieldHint(field, lastSet) {
@@ -2600,8 +2766,7 @@
   }
 
   function repeatLastSet() {
-    const pastSets = loadData().sets[currentExercise] || [];
-    const lastSet = pastSets[pastSets.length - 1];
+    const lastSet = lastSetLike(currentExercise);
     if (!lastSet) return;
     currentFields.forEach((field, i) => {
       logInputs[i].value = field.key in lastSet ? lastSet[field.key] : "";
@@ -2620,6 +2785,7 @@
       date: todayLocal(),
     };
     setFromBoxes(set);
+    if (currentTag) set.tag = currentTag;
     const note = logNote.value.trim().slice(0, 100);
     if (note) set.note = note;
 
@@ -2647,6 +2813,8 @@
     const saved = updateData((data) => {
       const set = data.sets[currentExercise].find((past) => past.id === editingSetId);
       setFromBoxes(set);
+      if (currentTag) set.tag = currentTag;
+      else delete set.tag;
       const note = logNote.value.trim().slice(0, 100);
       if (note) set.note = note;
       else delete set.note;
@@ -2941,10 +3109,18 @@
   });
 
   logHistory.addEventListener("click", () => {
+    historyTag = currentTag; // History opens on the variation being logged
+    historyTagFor = currentExercise;
     go(`${currentSplit}/history/${encodeURIComponent(currentExercise)}`);
   });
 
   logDelete.addEventListener("click", deleteEditingSet);
+  historyTags.addEventListener("click", (event) => {
+    const chip = event.target.closest("button");
+    if (!chip) return;
+    historyTag = chip.dataset.historyTag;
+    showScreen();
+  });
   logRepeat.addEventListener("click", repeatLastSet);
 
   function decimalsOnly(text) {
@@ -3109,7 +3285,7 @@
   });
 
   // Tapping outside a popup closes it without saving.
-  for (const dialog of [logDialog, editor, splitEditor, nicknameEditor, bodyEditor, purgeEditor, confirmBox]) {
+  for (const dialog of [logDialog, tagEditor, editor, splitEditor, nicknameEditor, bodyEditor, purgeEditor, confirmBox]) {
     dialog.addEventListener("click", (event) => {
       if (event.target === dialog) dialog.close();
     });
