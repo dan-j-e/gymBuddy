@@ -309,6 +309,9 @@
     overflow-wrap: anywhere;
   }
 
+  .bubble { justify-content: space-between; gap: 12px; }
+  .today-count { flex-shrink: 0; color: var(--muted); font-size: 0.85rem; font-weight: 400; letter-spacing: 0; white-space: nowrap; }
+
   #add-first { margin: auto 0; min-height: 96px; }
 
   /* Progress screen and charts */
@@ -598,6 +601,15 @@
   .name-editor .purge-inputs input { padding: 0; text-align: center; font-size: 1.5rem; }
   #purge-go:not(:disabled) { background: var(--coral); }
 
+  #confirm-box form { display: flex; flex-direction: column; gap: var(--gap); padding: var(--gap); }
+  #confirm-text { padding: 10px 6px 4px; font-size: 1.05rem; line-height: 1.45; white-space: pre-line; }
+  .confirm-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: var(--gap); }
+  .confirm-buttons button { min-height: 52px; font-size: 1rem; }
+  #confirm-cancel[hidden] { display: none; }
+  #confirm-box button:focus:not(:focus-visible) { outline: none; }
+  .confirm-buttons:has(#confirm-cancel[hidden]) { grid-template-columns: 1fr; }
+  #confirm-ok.danger-fill { background: var(--danger, var(--coral)); border-color: var(--danger, var(--coral)); color: var(--bg); }
+
   #toast {
     position: fixed;
     top: 33vh;
@@ -662,6 +674,9 @@
   .toggle button { background: none; color: var(--text); }
   dialog { background: var(--bg); animation: none; }
   #toast { background: var(--text); color: var(--bg); border-radius: 8px; animation: none; }
+  #toast.undo { display: flex; align-items: center; gap: 14px; padding: 6px 6px 6px 18px; pointer-events: auto; }
+  #toast.undo[hidden] { display: none; }
+  #toast.undo button { min-height: 40px; padding: 0 16px; background: var(--bg); color: var(--text); border-color: var(--bg); font-weight: 600; }
   #toast.success { background: #34c27a; border-color: #34c27a; color: #0b1a12; } /* green: logged */
   .hero-figure { font-size: 1.9rem; }
   .chart-card svg text.end-label { fill: var(--text); }
@@ -740,6 +755,11 @@
       <div class="toggle">
         <button data-order="reps">Reps first</button>
         <button data-order="weight">Weight first</button>
+      </div>
+      <p class="hint">After saving a set</p>
+      <div class="toggle">
+        <button data-after="close">Close the popup</button>
+        <button data-after="stay">Stay open</button>
       </div>
     </section>
     <section>
@@ -861,6 +881,16 @@
     </div>
     <p id="purge-preview"></p>
     <button id="purge-go" class="primary">Delete</button>
+  </form>
+</dialog>
+
+<dialog id="confirm-box">
+  <form method="dialog">
+    <p id="confirm-text"></p>
+    <div class="confirm-buttons">
+      <button id="confirm-cancel" value="cancel">Cancel</button>
+      <button id="confirm-ok" value="ok" class="primary">OK</button>
+    </div>
   </form>
 </dialog>
 
@@ -1263,10 +1293,33 @@
   }
 
   function popupOpen() {
-    return [logDialog, editor, splitEditor, nicknameEditor, bodyEditor, purgeEditor].some((dialog) => dialog.open);
+    return [logDialog, editor, splitEditor, nicknameEditor, bodyEditor, purgeEditor, confirmBox].some((dialog) => dialog.open);
+  }
+
+  // The app's own yes/no box, matching its look. Resolves true for OK, false for anything else.
+  // { alertOnly: true } shows just OK, for a message.
+  let confirmResolve = null;
+
+  function askConfirm(message, { ok = "OK", danger = false, alertOnly = false } = {}) {
+    if (confirmResolve) confirmResolve(false);
+    document.getElementById("confirm-text").textContent = message;
+    const okButton = document.getElementById("confirm-ok");
+    okButton.textContent = ok;
+    okButton.classList.toggle("danger-fill", danger);
+    document.getElementById("confirm-cancel").hidden = alertOnly;
+    confirmBox.returnValue = "";
+    confirmBox.showModal();
+    return new Promise((resolve) => { confirmResolve = resolve; });
   }
 
   const screens = [...document.querySelectorAll(".screen")];
+  const confirmBox = document.getElementById("confirm-box");
+  confirmBox.addEventListener("close", () => {
+    if (!confirmResolve) return;
+    const resolve = confirmResolve;
+    confirmResolve = null;
+    resolve(confirmBox.returnValue === "ok");
+  });
   const nicknameInput = document.getElementById("nickname-input");
   const nicknameDone = document.getElementById("nickname-done");
   const nicknameHint = document.getElementById("nickname-hint");
@@ -1361,7 +1414,7 @@
     return `var(${SPLIT_COLOURS[index % SPLIT_COLOURS.length]})`;
   }
 
-  function renderExercises(split, index) {
+  function renderExercises(split, index, data = loadData()) {
     splitTitle.textContent = split.name;
     settingsLink.dataset.go = `${index}/settings`;
     bubbles.style.setProperty("--colour", splitColour(index));
@@ -1381,9 +1434,19 @@
     bubbles.replaceChildren(...split.exercises.map((name, i) => {
       const bubble = document.createElement("button");
       bubble.className = "bubble";
-      bubble.textContent = name;
+      const label = document.createElement("span");
+      label.textContent = name;
+      bubble.append(label);
       if (!reordering) {
         bubble.dataset.exercise = name;
+        // What's done today, at a glance mid-workout.
+        const today = (data.sets[name] || []).filter((set) => set.date === todayLocal()).length;
+        if (today) {
+          const count = document.createElement("small");
+          count.className = "today-count";
+          count.textContent = `${today} ${today === 1 ? "set" : "sets"} today`;
+          bubble.append(count);
+        }
         return bubble;
       }
       return editLine(bubble, "exercises", i, split.exercises.length);
@@ -1444,6 +1507,9 @@
 
   function renderAppSettings(data) {
     document.getElementById("nickname-value").textContent = data.nickname;
+    document.querySelectorAll("[data-after]").forEach((button) => {
+      button.classList.toggle("chosen", (button.dataset.after === "stay") === Boolean(data.stayOpen));
+    });
     orderButtons.forEach((button) => {
       button.classList.toggle("chosen", (button.dataset.order === "weight") === Boolean(data.weightFirst));
     });
@@ -1845,6 +1911,7 @@
     nicknameEditor.close();
     bodyEditor.close();
     purgeEditor.close();
+    if (confirmBox.open) confirmBox.close();
 
     // Once there are logged sets the nickname is locked in, so they can't land on someone else's profile.
     const hasSets = Object.keys(data.sets).length > 0;
@@ -1877,7 +1944,7 @@
         renderHistory(data, currentExercise, currentSplit);
         showOnly("history");
       } else {
-        renderExercises(split, currentSplit);
+        renderExercises(split, currentSplit, data);
         showOnly("exercises");
       }
     } else if (route === "settings") {
@@ -2043,11 +2110,11 @@
     editorSave.disabled = !name || alreadyHere;
   }
 
-  function saveEditor() {
+  async function saveEditor() {
     const name = cleanName(editorName.value);
     const renaming = editingName !== null && name !== editingName;
     if (renaming && exerciseExists(loadData(), name)
-        && !confirm(`${name} already exists. Merge them? Their logged sets get combined.`)) return;
+        && !(await askConfirm(`${name} already exists. Merge them? Their logged sets get combined.`, { ok: "Merge" }))) return;
 
     const saved = updateData((data) => {
       if (renaming) renameExercise(data, editingName, name);
@@ -2126,19 +2193,22 @@
   }
 
   // Only this split's list changes. Sets stay, so adding it back brings them back.
+  // Goes at once with an Undo, instead of asking first.
   function deleteExercise(name) {
-    const split = loadData().splits[currentSplit];
-    if (!confirm(`Delete ${name} from ${split.name}? Its logged sets are kept.`)) return;
-    const saved = updateData((data) => {
-      const list = data.splits[currentSplit];
-      list.exercises = list.exercises.filter((exercise) => exercise !== name);
+    const splitIndex = currentSplit;
+    const row = settingsList.querySelector(`[data-delete-exercise="${CSS.escape(name)}"]`);
+    if (row) row.closest(".edit-line").remove();
+    offerUndo(`${name} removed`, () => {
+      updateData((data) => {
+        const list = data.splits[splitIndex];
+        list.exercises = list.exercises.filter((exercise) => exercise !== name);
+      });
     });
-    if (saved) showScreen();
   }
 
-  function deleteSplit(index) {
+  async function deleteSplit(index) {
     const { name } = loadData().splits[index];
-    if (!confirm(`Delete ${name}? Its exercise list goes, but logged sets are kept.`)) return;
+    if (!(await askConfirm(`Delete ${name}? Its exercise list goes, but logged sets are kept.`, { ok: "Delete", danger: true }))) return;
     if (updateData((data) => { data.splits.splice(index, 1); })) showScreen();
   }
 
@@ -2153,6 +2223,12 @@
 
   // Opens empty to log a new set, or filled in when given a past set to edit.
   function openLog(exercise, setToEdit = null) {
+    prepareLog(exercise, setToEdit);
+    openPopup(logDialog);
+  }
+
+  // Fills the popup for an exercise: fresh to log a new set, or with a past set to edit.
+  function prepareLog(exercise, setToEdit = null) {
     const data = loadData();
     const pastSets = data.sets[exercise] || [];
     const lastSet = pastSets[pastSets.length - 1] || {};
@@ -2185,7 +2261,6 @@
     logHistory.disabled = pastSets.length === 0;
     logDelete.hidden = !setToEdit;
     updateTick();
-    openPopup(logDialog);
   }
 
   // The last logged value, or the field's name if there isn't one.
@@ -2247,7 +2322,19 @@
       data.sets[currentExercise].push(set);
     }, false);
     if (saved) showToast(`Logged ${currentExercise}`, "success");
+    if (saved && loadData().stayOpen) {
+      // Ready for the next set: boxes cleared, hints and ↻ now showing this set.
+      prepareLog(currentExercise);
+      logInputs[0].focus({ preventScroll: true });
+      if (!exercisesScreenHidden()) renderExercises(loadData().splits[currentSplit], currentSplit);
+      return;
+    }
     logDialog.close();
+    if (!exercisesScreenHidden()) showScreen(); // update "sets today"
+  }
+
+  function exercisesScreenHidden() {
+    return document.getElementById("exercises").hidden;
   }
 
   function saveEditedSet() {
@@ -2263,25 +2350,64 @@
     showScreen();
   }
 
-  // The id is remembered so a sync can't bring the set back from another copy.
+  // The id is remembered so a sync can't bring the set back from another copy. Goes at once
+  // with an Undo, instead of asking first.
   function deleteEditingSet() {
-    if (!confirm("Delete this set? This can't be undone.")) return;
-    const saved = updateData((data) => {
-      data.sets[currentExercise] = data.sets[currentExercise].filter((set) => set.id !== editingSetId);
-      if (data.sets[currentExercise].length === 0) delete data.sets[currentExercise];
-      data.deleted = [...(data.deleted || []), editingSetId].sort();
-    }, false);
-    if (saved) showToast("Set deleted");
-    showScreen();
+    const exercise = currentExercise;
+    const id = editingSetId;
+    logDialog.close();
+    const row = historyList.querySelector(`[data-edit-set="${CSS.escape(id)}"]`);
+    if (row) row.remove();
+    offerUndo("Set deleted", () => {
+      updateData((data) => {
+        data.sets[exercise] = (data.sets[exercise] || []).filter((set) => set.id !== id);
+        if (data.sets[exercise].length === 0) delete data.sets[exercise];
+        data.deleted = [...(data.deleted || []), id].sort();
+      }, false);
+    });
   }
 
-  // "success" turns it green, for a set that's been logged.
-  function showToast(message, kind = "") {
+  // Undo works by waiting: the change is only saved after 5 seconds, or sooner if the app goes
+  // into the background or another delete starts. Undo just puts the screen back. Saving early
+  // matters, because once a deletion syncs, other copies would apply it too.
+  const UNDO_MS = 5000;
+  let pendingUndo = null;
+
+  function offerUndo(message, commit) {
+    commitPendingUndo();
+    pendingUndo = { commit, timer: setTimeout(commitPendingUndo, UNDO_MS) };
+    showToast(message, "undo", () => {
+      if (!pendingUndo) return;
+      clearTimeout(pendingUndo.timer);
+      pendingUndo = null;
+      toast.hidden = true;
+      if (!popupOpen()) showScreen();
+    });
+  }
+
+  function commitPendingUndo() {
+    if (!pendingUndo) return;
+    const { commit, timer } = pendingUndo;
+    pendingUndo = null;
+    clearTimeout(timer);
+    if (toast.className === "undo") toast.hidden = true;
+    commit();
+    if (!popupOpen()) showScreen();
+  }
+
+  // "success" turns it green, for a set that's been logged. "undo" adds an Undo button.
+  function showToast(message, kind = "", undo = null) {
     toast.textContent = message;
     toast.className = kind;
+    if (undo) {
+      const button = document.createElement("button");
+      button.textContent = "Undo";
+      button.addEventListener("click", undo);
+      toast.append(button);
+    }
     toast.hidden = false;
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => { toast.hidden = true; }, kind ? 1800 : 1200);
+    toastTimer = setTimeout(() => { toast.hidden = true; }, undo ? UNDO_MS : kind ? 1800 : 1200);
   }
 
   document.addEventListener("click", (event) => {
@@ -2305,6 +2431,10 @@
       const set = (loadData().sets[currentExercise] || []).find((past) => past.id === button.dataset.editSet);
       if (set) openLog(currentExercise, set);
       else showScreen();
+    }
+    if (button.dataset.after) {
+      const stay = button.dataset.after === "stay";
+      if (updateData((data) => { data.stayOpen = stay; })) showScreen();
     }
     if (button.dataset.order) {
       const order = button.dataset.order;
@@ -2346,11 +2476,11 @@
   splitCount.addEventListener("input", updateSplitCount);
   customNames.addEventListener("input", updateCustomDone);
 
-  document.getElementById("custom-form").addEventListener("submit", (event) => {
+  document.getElementById("custom-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     const names = customSplitNames();
     if (!names) return;
-    if (loadData().splits && !confirm("Replace your splits? Exercise lists reset, but logged sets are kept.")) return;
+    if (loadData().splits && !(await askConfirm("Replace your splits? Exercise lists reset, but logged sets are kept.", { ok: "Replace" }))) return;
     const splits = names.map((name) => ({ name, exercises: startingExercises(name, names.length) }));
     const saved = updateData((data) => {
       data.splits = splits;
@@ -2445,7 +2575,7 @@
       backup = parsed.app === "gym-buddy" ? parsed.data : parsed;
       if (!backup || typeof backup.sets !== "object" || !Array.isArray(backup.cardio)) throw new Error("Not a backup");
     } catch {
-      alert("That file isn't a Gym Buddy backup.");
+      askConfirm("That file isn't a Gym Buddy backup.", { alertOnly: true });
       return;
     }
 
@@ -2466,7 +2596,7 @@
     lines.push(`Logged sets: ${count(current)} → ${count(merged)}.`);
     if (weighIns(merged) !== weighIns(current)) lines.push(`Weigh-ins: ${weighIns(current)} → ${weighIns(merged)}.`);
     if (setupReplaced) lines.push("Your splits will be swapped for the backup's, because its setup is newer.");
-    if (!confirm(`${lines.join("\n")}\n\nImport it?`)) return;
+    if (!(await askConfirm(lines.join("\n"), { ok: "Import" }))) return;
 
     const saved = updateData((data) => {
       Object.keys(data).forEach((key) => delete data[key]);
@@ -2608,11 +2738,11 @@
 
   // Deleted ids are remembered, so a sync can't bring anything back from another copy.
   // Splits, exercises and settings aren't touched.
-  purgeEditor.querySelector("form").addEventListener("submit", (event) => {
+  purgeEditor.querySelector("form").addEventListener("submit", async (event) => {
     event.preventDefault();
     if (purgeGo.disabled) return;
     const summary = purgeSummary(purgeTargets(loadData()));
-    if (!confirm(`Delete ${summary}? This can't be undone, and it applies on all your devices.`)) return;
+    if (!(await askConfirm(`Delete ${summary}? This can't be undone, and it applies on all your devices.`, { ok: "Delete", danger: true }))) return;
     const saved = updateData((data) => {
       const { recent } = purgeTargets(data);
       const removed = [...Object.values(data.sets).flat(), ...(data.body || [])].filter(recent).map((entry) => entry.id);
@@ -2629,8 +2759,8 @@
     }
   });
 
-  function deleteWeighIn(id) {
-    if (!confirm("Delete this weight? This can't be undone.")) return;
+  async function deleteWeighIn(id) {
+    if (!(await askConfirm("Delete this weight? This can't be undone.", { ok: "Delete", danger: true }))) return;
     const saved = updateData((data) => {
       data.body = data.body.filter((entry) => entry.id !== id);
       data.deleted = [...(data.deleted || []), id].sort();
@@ -2657,7 +2787,7 @@
   });
 
   // Tapping outside a popup closes it without saving.
-  for (const dialog of [logDialog, editor, splitEditor, nicknameEditor, bodyEditor, purgeEditor]) {
+  for (const dialog of [logDialog, editor, splitEditor, nicknameEditor, bodyEditor, purgeEditor, confirmBox]) {
     dialog.addEventListener("click", (event) => {
       if (event.target === dialog) dialog.close();
     });
@@ -2790,7 +2920,10 @@
   // Not available when opened as a file or over plain http, which is fine for local testing.
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState !== "visible") return;
+    if (document.visibilityState !== "visible") {
+      commitPendingUndo(); // the app may be closed while hidden, so save any pending delete now
+      return;
+    }
     // "Moved today" may have become yesterday while the app was in the background.
     if (location.hash === "#progress" && !popupOpen()) showScreen();
     syncNow();
