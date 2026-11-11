@@ -410,7 +410,8 @@
   .metric-row + .wide-pill, .chart-card .wide-pill { width: 100%; margin-top: 12px; background: var(--line); }
   .delete-small { width: 44px; height: 44px; background: var(--line); }
   #history-list { display: flex; flex-direction: column; gap: var(--gap); overflow-x: hidden; }
-  #history-list .edit-row { touch-action: pan-y; transition: transform 120ms; }
+  #history-list .edit-row { touch-action: pan-y; transition: transform 150ms ease-out; }
+  #history-list .edit-row.dragging { transition: none; } /* follows the finger exactly */
   #history-list .edit-row.swipe-armed { border-color: var(--danger, var(--coral)); color: var(--danger, var(--coral)); }
 
   /* App settings: one scrolling page in labelled sections */
@@ -683,6 +684,8 @@
   .toggle button { background: none; color: var(--text); }
   dialog { background: var(--bg); animation: none; }
   #toast { background: var(--text); color: var(--bg); border-radius: 8px; animation: none; }
+  /* Undo sits low, beside the back button, so it never covers the rows being swiped. */
+  #toast.undo { top: auto; bottom: calc(max(var(--gap), env(safe-area-inset-bottom)) + 6px); left: auto; right: var(--gap); transform: none; }
   #toast.undo { display: flex; align-items: center; gap: 14px; padding: 6px 6px 6px 18px; pointer-events: auto; }
   #toast.undo[hidden] { display: none; }
   #toast.undo button { min-height: 40px; padding: 0 16px; background: var(--bg); color: var(--text); border-color: var(--bg); font-weight: 600; }
@@ -1705,7 +1708,11 @@
         start = null; // scrolling, not swiping
         return;
       }
-      if (!swiping && moveX < -10) swiping = true;
+      if (!swiping && moveX < -10) {
+        swiping = true;
+        row.classList.add("dragging");
+        row.setPointerCapture?.(event.pointerId); // keeps tracking even if the finger leaves the row
+      }
       if (!swiping) return;
       dx = Math.min(0, moveX);
       row.style.transform = `translateX(${dx}px)`;
@@ -1715,6 +1722,7 @@
       if (!start && !swiping) return;
       start = null;
       if (!swiping) return;
+      row.classList.remove("dragging");
       row.dataset.swiped = "1"; // swallow the click this pointer up produces
       setTimeout(() => { delete row.dataset.swiped; }, 400);
       if (dx < -SWIPE_DELETE_PX) {
