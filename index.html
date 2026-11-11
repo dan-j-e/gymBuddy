@@ -327,6 +327,13 @@
   /* Progress fills the screen with two equal cards. Each chart is drawn to fit its card. */
   #debug-info { padding: 0 6px; font-size: 0.85rem; line-height: 1.5; white-space: pre-wrap; }
   #debug-screen .back { position: relative; }
+  #workout-button { flex-shrink: 0; }
+  #workout-button.active { background: none; color: var(--text); border-color: var(--text); }
+  .summary-stats { padding: 0 6px 4px; font-size: 1.1rem; }
+  .summary-item { flex-shrink: 0; padding: 12px 16px; border: 1px solid var(--line); border-radius: 8px; }
+  .summary-item h2 { font-size: 1.05rem; font-weight: 600; }
+  .summary-item p { margin-top: 4px; color: var(--muted); font-size: 0.95rem; line-height: 1.4; }
+
   #progress-area {
     flex: 1;
     min-height: 0;
@@ -402,7 +409,9 @@
   .metric-row { margin-top: 8px; }
   .metric-row + .wide-pill, .chart-card .wide-pill { width: 100%; margin-top: 12px; background: var(--line); }
   .delete-small { width: 44px; height: 44px; background: var(--line); }
-  #history-list { display: flex; flex-direction: column; gap: var(--gap); }
+  #history-list { display: flex; flex-direction: column; gap: var(--gap); overflow-x: hidden; }
+  #history-list .edit-row { touch-action: pan-y; transition: transform 120ms; }
+  #history-list .edit-row.swipe-armed { border-color: var(--danger, var(--coral)); color: var(--danger, var(--coral)); }
 
   /* App settings: one scrolling page in labelled sections */
   .settings-page { gap: 22px; padding-bottom: var(--gap); }
@@ -730,6 +739,7 @@
     <button id="install-dismiss" class="move" aria-label="Dismiss"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button>
   </div>
   <div id="split-rows" class="row-list"></div>
+  <button id="workout-button" class="primary">Start workout</button>
   <div class="bottom-bar">
     <button class="wide-pill" data-go="progress">Progress</button>
     <button class="wide-pill" data-go="settings">Settings</button>
@@ -788,6 +798,13 @@
   <pre id="debug-info"></pre>
   <div class="spacer"></div>
   <button class="back" data-go="settings" aria-label="Back"><svg class="icon" aria-hidden="true"><use href="#i-back"/></svg></button>
+</main>
+
+<main id="summary" class="screen" hidden>
+  <h1>Workout done</h1>
+  <p id="summary-stats" class="summary-stats"></p>
+  <div id="summary-list" class="scroll-area"></div>
+  <button class="back" data-go="" aria-label="Back"><svg class="icon" aria-hidden="true"><use href="#i-back"/></svg></button>
 </main>
 
 <main id="exercises" class="screen" hidden>
@@ -1188,6 +1205,17 @@
     if (weighIns.size > 0 || winner.body) {
       merged.body = [...weighIns.values()].sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id));
     }
+
+    // Workouts merge like weigh-ins. An active one stays active unless either copy finished it,
+    // or ended it without saving (which lists its id in deleted).
+    const workouts = new Map();
+    for (const workout of [...(local.workouts || []), ...(remote.workouts || [])]) workouts.set(workout.id, workout);
+    if (workouts.size > 0) merged.workouts = [...workouts.values()].sort((a, b) => a.start - b.start);
+    const active = [local.activeWorkout, remote.activeWorkout]
+      .filter((workout) => workout && !workouts.has(workout.id) && !deleted.includes(workout.id))
+      .sort((a, b) => b.start - a.start)[0];
+    if (active) merged.activeWorkout = active;
+    else delete merged.activeWorkout;
     return merged;
   }
 
@@ -1396,6 +1424,7 @@
   }
 
   function renderLanding(data) {
+    renderWorkoutButton(data);
     document.getElementById("greeting").textContent = `Hi, ${data.nickname}!`;
     updateSyncStatus();
     splitRows.replaceChildren(...data.splits.map((split, i) => {
@@ -1508,7 +1537,7 @@
   function renderAppSettings(data) {
     document.getElementById("nickname-value").textContent = data.nickname;
     document.querySelectorAll("[data-after]").forEach((button) => {
-      button.classList.toggle("chosen", (button.dataset.after === "stay") === Boolean(data.stayOpen));
+      button.classList.toggle("chosen", (button.dataset.after === "stay") === (data.stayOpen !== false));
     });
     orderButtons.forEach((button) => {
       button.classList.toggle("chosen", (button.dataset.order === "weight") === Boolean(data.weightFirst));
@@ -1553,6 +1582,7 @@
       const row = document.createElement("button");
       row.className = "edit-row";
       row.dataset.editSet = set.id;
+      enableSwipe(row, () => deleteSet(name, set.id));
       const label = document.createElement("span");
       label.textContent = describeSet(set);
       const date = document.createElement("small");
@@ -1568,6 +1598,136 @@
       row.append(label);
       return row;
     }));
+  }
+
+  // A workout is just a start and end time. Its sets are whatever was logged in between, so
+  // logging doesn't change at all, and an unfinished workout survives the app being closed.
+  function workoutMinutes(start, end = Date.now()) {
+    return Math.max(1, Math.round((end - start) / 60000));
+  }
+
+  function renderWorkoutButton(data = loadData()) {
+    const button = document.getElementById("workout-button");
+    const active = data.activeWorkout;
+    button.classList.toggle("active", Boolean(active));
+    button.textContent = active ? `Finish workout · ${workoutMinutes(active.start)} min` : "Start workout";
+  }
+
+  // Every set logged between two times, grouped by exercise in the order each was first done.
+  function workoutSets(data, start, end) {
+    const groups = new Map();
+    const inWorkout = Object.entries(data.sets)
+      .flatMap(([name, sets]) => sets.map((set) => ({ name, set, at: loggedAt(set) })))
+      .filter(({ at }) => at >= start && at <= end)
+      .sort((a, b) => a.at - b.at);
+    for (const { name, set } of inWorkout) groups.set(name, [...(groups.get(name) || []), set]);
+    return groups;
+  }
+
+  async function toggleWorkout() {
+    const data = loadData();
+    const active = data.activeWorkout;
+    if (!active) {
+      if (updateData((d) => { d.activeWorkout = { id: `w-${Date.now().toString(36)}`, start: Date.now() }; }, false)) {
+        showToast("Workout started");
+        showScreen();
+      }
+      return;
+    }
+    const end = Date.now();
+    if (workoutSets(data, active.start, end).size === 0) {
+      if (!(await askConfirm("No sets logged in this workout. End it without saving?", { ok: "End it" }))) return;
+      const ended = updateData((d) => {
+        d.deleted = [...(d.deleted || []), active.id].sort();
+        delete d.activeWorkout;
+      }, false);
+      if (ended) showScreen();
+      return;
+    }
+    const saved = updateData((d) => {
+      d.workouts = [...(d.workouts || []), { ...active, end }];
+      delete d.activeWorkout;
+    }, false);
+    if (saved) go("summary");
+  }
+
+  // The most recent finished workout: how long, how much, and each exercise in order.
+  function renderSummary(data) {
+    const workout = (data.workouts || [])[(data.workouts || []).length - 1];
+    const list = document.getElementById("summary-list");
+    if (!workout) {
+      document.getElementById("summary-stats").textContent = "No finished workouts yet.";
+      list.replaceChildren();
+      return;
+    }
+    const groups = workoutSets(data, workout.start, workout.end);
+    const sets = [...groups.values()].flat();
+    const kg = Math.round(sets.reduce((sum, set) => sum + (set.reps && set.weight ? set.reps * set.weight : 0), 0));
+    const parts = [`${workoutMinutes(workout.start, workout.end)} min`, `${sets.length} ${sets.length === 1 ? "set" : "sets"}`];
+    if (kg) parts.push(`${kg.toLocaleString()} kg moved`);
+    document.getElementById("summary-stats").textContent = parts.join(" · ");
+    list.replaceChildren(...[...groups].map(([name, exerciseSets], i) => {
+      const item = document.createElement("div");
+      item.className = "summary-item";
+      const heading = document.createElement("h2");
+      heading.textContent = `${i + 1}. ${name}`;
+      const detail = document.createElement("p");
+      detail.textContent = exerciseSets.map(describeSet).join("\n");
+      detail.style.whiteSpace = "pre-line";
+      item.append(heading, detail);
+      return item;
+    }));
+  }
+
+  document.getElementById("workout-button").addEventListener("click", toggleWorkout);
+  setInterval(() => {
+    if (!document.getElementById("landing").hidden) renderWorkoutButton();
+  }, 30000);
+
+  // Swipe a row left to delete it. Up-and-down movement is left to the list's scrolling, and a
+  // swipe that doesn't go far enough springs back. The tap that ends a swipe doesn't open the row.
+  const SWIPE_DELETE_PX = 90;
+
+  function enableSwipe(row, onDelete) {
+    let start = null;
+    let dx = 0;
+    let swiping = false;
+    row.addEventListener("pointerdown", (event) => {
+      start = { x: event.clientX, y: event.clientY };
+      dx = 0;
+      swiping = false;
+    });
+    row.addEventListener("pointermove", (event) => {
+      if (!start) return;
+      const moveX = event.clientX - start.x;
+      const moveY = event.clientY - start.y;
+      if (!swiping && Math.abs(moveY) > 10 && Math.abs(moveY) > Math.abs(moveX)) {
+        start = null; // scrolling, not swiping
+        return;
+      }
+      if (!swiping && moveX < -10) swiping = true;
+      if (!swiping) return;
+      dx = Math.min(0, moveX);
+      row.style.transform = `translateX(${dx}px)`;
+      row.classList.toggle("swipe-armed", dx < -SWIPE_DELETE_PX);
+    });
+    const finish = () => {
+      if (!start && !swiping) return;
+      start = null;
+      if (!swiping) return;
+      row.dataset.swiped = "1"; // swallow the click this pointer up produces
+      setTimeout(() => { delete row.dataset.swiped; }, 400);
+      if (dx < -SWIPE_DELETE_PX) {
+        row.style.transform = "translateX(-110%)";
+        setTimeout(onDelete, 120);
+      } else {
+        row.style.transform = "";
+        row.classList.remove("swipe-armed");
+      }
+      swiping = false;
+    };
+    row.addEventListener("pointerup", finish);
+    row.addEventListener("pointercancel", finish);
   }
 
   // Charts: hand-built SVG, so there's no library to download at the gym. One colour per chart,
@@ -1953,6 +2113,9 @@
     } else if (route === "debug") {
       showOnly("debug-screen");
       showScreenCheck();
+    } else if (route === "summary") {
+      renderSummary(data);
+      showOnly("summary");
     } else if (route === "progress") {
       showOnly("progress");
       renderProgress(data);
@@ -2223,6 +2386,7 @@
 
   // Opens empty to log a new set, or filled in when given a past set to edit.
   function openLog(exercise, setToEdit = null) {
+    if (logDialog.open) logDialog.close(); // with stay-open, a popup can still be up
     prepareLog(exercise, setToEdit);
     openPopup(logDialog);
   }
@@ -2322,7 +2486,7 @@
       data.sets[currentExercise].push(set);
     }, false);
     if (saved) showToast(`Logged ${currentExercise}`, "success");
-    if (saved && loadData().stayOpen) {
+    if (saved && loadData().stayOpen !== false) { // stays open unless switched off in settings
       // Ready for the next set: boxes cleared, hints and ↻ now showing this set.
       prepareLog(currentExercise);
       logInputs[0].focus({ preventScroll: true });
@@ -2353,9 +2517,12 @@
   // The id is remembered so a sync can't bring the set back from another copy. Goes at once
   // with an Undo, instead of asking first.
   function deleteEditingSet() {
-    const exercise = currentExercise;
-    const id = editingSetId;
     logDialog.close();
+    deleteSet(currentExercise, editingSetId);
+  }
+
+  // Shared by the Delete button and swiping a row away in History.
+  function deleteSet(exercise, id) {
     const row = historyList.querySelector(`[data-edit-set="${CSS.escape(id)}"]`);
     if (row) row.remove();
     offerUndo("Set deleted", () => {
@@ -2367,10 +2534,10 @@
     });
   }
 
-  // Undo works by waiting: the change is only saved after 5 seconds, or sooner if the app goes
+  // Undo works by waiting: the change is only saved after 3 seconds, or sooner if the app goes
   // into the background or another delete starts. Undo just puts the screen back. Saving early
   // matters, because once a deletion syncs, other copies would apply it too.
-  const UNDO_MS = 5000;
+  const UNDO_MS = 3000;
   let pendingUndo = null;
 
   function offerUndo(message, commit) {
@@ -2426,6 +2593,7 @@
     if (button.dataset.deleteExercise) deleteExercise(button.dataset.deleteExercise);
     if (button.dataset.deleteSplit) deleteSplit(Number(button.dataset.deleteSplit));
     if (button.dataset.addSplit !== undefined) openSplitEditor(null);
+    if (button.dataset.swiped) return;
     if (button.dataset.editSet) {
       // A sync may have removed it moments ago; if so, just refresh the list.
       const set = (loadData().sets[currentExercise] || []).find((past) => past.id === button.dataset.editSet);
