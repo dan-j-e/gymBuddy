@@ -398,7 +398,7 @@
   .chart-table td:last-child { text-align: right; }
   .metric-row { margin-top: 8px; }
   .metric-row + .wide-pill, .chart-card .wide-pill { width: 100%; margin-top: 12px; background: var(--line); }
-  .delete-small { width: 36px; height: 36px; background: var(--line); }
+  .delete-small { width: 44px; height: 44px; background: var(--line); }
   #history-list { display: flex; flex-direction: column; gap: var(--gap); }
 
   /* App settings: one scrolling page in labelled sections */
@@ -636,6 +636,7 @@
     --sage: #121212;
     --chart: #ececec;
     --danger: #ff6b6b; /* the one colour kept: it marks things that delete */
+    --off: #5e5e5e; /* greyed-out controls: clearly off, but still visible */
     --title-font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   }
   body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
@@ -652,7 +653,7 @@
   .edit-row { font-size: 1.05rem; font-weight: 500; border-radius: 8px; }
   .edit-row small, .toggle button.chosen, #reorder-toggle.chosen { background: var(--text); color: var(--bg); border-color: var(--text); }
   .back, #reorder-toggle, .move, #install-dismiss, .delete-small, .chart-card .wide-pill { background: none; color: var(--text); border-radius: 8px; }
-  .move:disabled { color: var(--line); }
+  .move:disabled, #log-repeat:disabled, #log-history:disabled { color: var(--off); }
   .primary, #tick, #install-go { background: var(--text); color: var(--bg); border-color: var(--text); }
   .primary:disabled, #tick:disabled, .name-editor .primary:disabled { background: none; color: var(--muted); border-color: var(--line); }
   #purge-go:not(:disabled) { background: var(--danger); border-color: var(--danger); color: var(--bg); }
@@ -710,13 +711,13 @@
   <p id="sync-status" class="hint" hidden></p>
   <div id="install-hint" hidden>
     <p id="install-text" class="hint"></p>
-    <button id="install-go" class="wide-pill" hidden>INSTALL</button>
+    <button id="install-go" class="wide-pill" hidden>Install</button>
     <button id="install-dismiss" class="move" aria-label="Dismiss"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button>
   </div>
   <div id="split-rows" class="row-list"></div>
   <div class="bottom-bar">
-    <button class="wide-pill" data-go="progress">PROGRESS</button>
-    <button class="wide-pill" data-go="settings">SETTINGS</button>
+    <button class="wide-pill" data-go="progress">Progress</button>
+    <button class="wide-pill" data-go="settings">Settings</button>
   </div>
 </main>
 
@@ -737,19 +738,22 @@
       <h2 class="settings-heading">Logging</h2>
       <p class="hint">Which box comes first</p>
       <div class="toggle">
-        <button data-order="reps">reps first</button>
-        <button data-order="weight">weight first</button>
+        <button data-order="reps">Reps first</button>
+        <button data-order="weight">Weight first</button>
       </div>
     </section>
     <section>
       <h2 class="settings-heading">Splits</h2>
+      <p class="hint">Tap a split to rename it.</p>
       <div id="split-list" class="edit-list"></div>
       <button id="add-split" class="settings-row no-arrow" data-add-split>+ Add split</button>
     </section>
     <section>
       <h2 class="settings-heading">Backup</h2>
       <button id="export-data" class="settings-row">Export my data</button>
-      <p class="hint">Saves everything to a file you keep. Worth doing now and then, since there's no password on your nickname.</p>
+      <button id="import-data" class="settings-row">Import a backup</button>
+      <input id="import-file" type="file" accept=".json,application/json" hidden>
+      <p class="hint">Export saves everything to a file you keep. Import adds a backup's logs back in, without deleting anything you've logged since.</p>
     </section>
   </div>
   <div class="bottom-bar">
@@ -769,21 +773,22 @@
 <main id="exercises" class="screen" hidden>
   <div class="title-row">
     <h1 id="split-title"></h1>
-    <button id="reorder-toggle">REORDER</button>
+    <button id="reorder-toggle">Reorder</button>
   </div>
   <div id="bubbles"></div>
   <div class="bottom-bar">
     <button class="back" data-go="" aria-label="Back"><svg class="icon" aria-hidden="true"><use href="#i-back"/></svg></button>
-    <button id="settings-link" class="wide-pill">SETTINGS</button>
+    <button id="settings-link" class="wide-pill">Settings</button>
   </div>
 </main>
 
 <main id="settings" class="screen" hidden>
   <h1 id="settings-title"></h1>
+  <p class="hint section-label">Tap an exercise to rename it or change its type.</p>
   <div id="settings-list" class="edit-list"></div>
   <div class="bottom-bar">
     <button id="settings-back" class="back" aria-label="Back"><svg class="icon" aria-hidden="true"><use href="#i-back"/></svg></button>
-    <button class="primary" data-add>+ ADD EXERCISE</button>
+    <button class="primary" data-add>+ Add exercise</button>
   </div>
 </main>
 
@@ -791,6 +796,7 @@
   <h1 id="history-title"></h1>
   <div class="scroll-area">
     <div id="history-chart"></div>
+    <p id="history-hint" class="hint section-label">Tap a set to change or delete it.</p>
     <div id="history-list"></div>
   </div>
   <button id="history-back" class="back" aria-label="Back"><svg class="icon" aria-hidden="true"><use href="#i-back"/></svg></button>
@@ -817,7 +823,7 @@
       <button type="button" data-type="cardio">cardio</button>
     </div>
     <p id="editor-hint"></p>
-    <button id="editor-save" class="primary">SAVE</button>
+    <button id="editor-save" class="primary">Save</button>
   </form>
 </dialog>
 
@@ -825,7 +831,7 @@
   <form>
     <input id="split-name" type="text" placeholder="Split name" aria-label="Split name" maxlength="20" autocomplete="off">
     <p id="split-hint"></p>
-    <button id="split-save" class="primary">SAVE</button>
+    <button id="split-save" class="primary">Save</button>
   </form>
 </dialog>
 
@@ -833,7 +839,7 @@
   <form>
     <input id="new-nickname" type="text" placeholder="New nickname" aria-label="New nickname" maxlength="20" autocomplete="off">
     <p id="new-nickname-hint"></p>
-    <button id="new-nickname-save" class="primary">SAVE</button>
+    <button id="new-nickname-save" class="primary">Save</button>
   </form>
 </dialog>
 
@@ -842,7 +848,7 @@
     <input id="body-height" type="text" inputmode="decimal" placeholder="Height in cm" aria-label="Height in centimetres" autocomplete="off">
     <input id="body-weight" type="text" inputmode="decimal" placeholder="Weight in kg" aria-label="Body weight in kilograms" autocomplete="off">
     <p>Both optional. Each weight is added, and the chart uses each day's average.</p>
-    <button id="body-save" class="primary">SAVE</button>
+    <button id="body-save" class="primary">Save</button>
   </form>
 </dialog>
 
@@ -854,7 +860,7 @@
       <input type="text" inputmode="numeric" maxlength="4" placeholder="mins" aria-label="Minutes" autocomplete="off">
     </div>
     <p id="purge-preview"></p>
-    <button id="purge-go" class="primary">DELETE</button>
+    <button id="purge-go" class="primary">Delete</button>
   </form>
 </dialog>
 
@@ -994,7 +1000,7 @@
       syncNow();
       return true;
     } catch {
-      showToast("not saved");
+      showToast("Couldn't save. Try again.");
       return false;
     }
   }
@@ -1361,14 +1367,14 @@
     bubbles.style.setProperty("--colour", splitColour(index));
     reordering = reordering && split.exercises.length > 1;
     reorderToggle.hidden = split.exercises.length < 2;
-    reorderToggle.textContent = reordering ? "DONE" : "REORDER";
+    reorderToggle.textContent = reordering ? "Done" : "Reorder";
     reorderToggle.classList.toggle("chosen", reordering);
     if (split.exercises.length === 0) {
       const add = document.createElement("button");
       add.id = "add-first";
       add.className = "primary";
       add.dataset.add = "";
-      add.textContent = "+ ADD EXERCISE";
+      add.textContent = "+ Add exercise";
       bubbles.replaceChildren(add);
       return;
     }
@@ -1468,6 +1474,7 @@
       chart.push(wait);
     }
     historyChart.replaceChildren(...chart);
+    document.getElementById("history-hint").hidden = sets.length === 0;
 
     if (sets.length === 0) {
       const message = document.createElement("p");
@@ -1761,7 +1768,7 @@
     const update = document.createElement("button");
     update.className = "metric-button";
     update.dataset.editBody = "";
-    update.textContent = parts.length ? "UPDATE" : "ADD";
+    update.textContent = parts.length ? "Update" : "Add";
     const line = document.createElement("div");
     line.className = "metric-line";
     line.append(summary, update);
@@ -2071,7 +2078,7 @@
   function openNicknameEditor() {
     newNickname.value = loadData().nickname;
     newNicknameHint.textContent = "You'll use this name to get your logs back. The old name will lead here too.";
-    newNicknameSave.textContent = "SAVE";
+    newNicknameSave.textContent = "Save";
     newNicknameSave.disabled = false;
     openPopup(nicknameEditor);
   }
@@ -2108,12 +2115,12 @@
       newNicknameHint.textContent = "Couldn't connect. Check your signal and try again.";
       return;
     } finally {
-      newNicknameSave.textContent = "SAVE";
+      newNicknameSave.textContent = "Save";
       newNicknameSave.disabled = false;
     }
 
     if (updateData((data) => { data.nickname = nickname; })) {
-      showToast("renamed");
+      showToast("Name changed");
       showScreen();
     }
   }
@@ -2252,7 +2259,7 @@
       else delete set.note;
       set.editedAt = Date.now();
     }, false);
-    if (saved) showToast("updated");
+    if (saved) showToast("Set updated");
     showScreen();
   }
 
@@ -2264,7 +2271,7 @@
       if (data.sets[currentExercise].length === 0) delete data.sets[currentExercise];
       data.deleted = [...(data.deleted || []), editingSetId].sort();
     }, false);
-    if (saved) showToast("deleted");
+    if (saved) showToast("Set deleted");
     showScreen();
   }
 
@@ -2415,10 +2422,61 @@
     link.click();
     link.remove();
     setTimeout(() => URL.revokeObjectURL(link.href), 10000);
-    showToast("backup saved");
+    showToast("Backup saved");
   }
 
   document.getElementById("export-data").addEventListener("click", exportData);
+
+  // Import merges a backup in exactly like a second phone would: every set from both is kept,
+  // deletions are respected, and the newer setup wins. The counts are shown before anything changes.
+  const importFile = document.getElementById("import-file");
+
+  document.getElementById("import-data").addEventListener("click", () => {
+    importFile.value = "";
+    importFile.click();
+  });
+
+  importFile.addEventListener("change", async () => {
+    const file = importFile.files[0];
+    if (!file) return;
+    let backup;
+    try {
+      const parsed = JSON.parse(await file.text());
+      backup = parsed.app === "gym-buddy" ? parsed.data : parsed;
+      if (!backup || typeof backup.sets !== "object" || !Array.isArray(backup.cardio)) throw new Error("Not a backup");
+    } catch {
+      alert("That file isn't a Gym Buddy backup.");
+      return;
+    }
+
+    const current = loadData();
+    const merged = { ...mergeData(current, backup), nickname: current.nickname, userId: current.userId };
+    const count = (data) => Object.values(data.sets).flat().length;
+    const weighIns = (data) => (data.body || []).length;
+    const setupReplaced = !sameData(merged.splits, current.splits);
+    if (count(merged) === count(current) && weighIns(merged) === weighIns(current) && !setupReplaced) {
+      showToast("Nothing new in that backup");
+      return;
+    }
+
+    const lines = [];
+    if (backup.nickname && cleanName(backup.nickname) !== cleanName(current.nickname)) {
+      lines.push(`This backup belongs to ${backup.nickname}, not ${current.nickname}. Its logs will be added to yours.`);
+    }
+    lines.push(`Logged sets: ${count(current)} → ${count(merged)}.`);
+    if (weighIns(merged) !== weighIns(current)) lines.push(`Weigh-ins: ${weighIns(current)} → ${weighIns(merged)}.`);
+    if (setupReplaced) lines.push("Your splits will be swapped for the backup's, because its setup is newer.");
+    if (!confirm(`${lines.join("\n")}\n\nImport it?`)) return;
+
+    const saved = updateData((data) => {
+      Object.keys(data).forEach((key) => delete data[key]);
+      Object.assign(data, merged);
+    }, false);
+    if (saved) {
+      showToast("Backup imported");
+      showScreen();
+    }
+  });
 
   document.getElementById("redo-setup").addEventListener("click", () => {
     resetSetup();
@@ -2483,7 +2541,7 @@
       data.body.push({ id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`, date: todayLocal(), weight });
     }, false);
     if (saved) {
-      showToast("saved");
+      showToast(weight ? "Weight saved" : "Saved");
       showScreen();
     }
   });
@@ -2566,7 +2624,7 @@
       data.deleted = [...(data.deleted || []), ...removed].sort();
     }, false);
     if (saved) {
-      showToast("deleted");
+      showToast("History deleted");
       showScreen();
     }
   });
@@ -2766,7 +2824,7 @@
     restart.className = "primary";
     restart.style.margin = "0 24px";
     restart.style.width = "calc(100% - 48px)";
-    restart.textContent = "START AGAIN";
+    restart.textContent = "Start again";
     restart.addEventListener("click", () => {
       if (!confirm("Clear this phone's copy? Type your nickname afterwards to get your logs back.")) return;
       localStorage.removeItem(STORAGE_KEY);
