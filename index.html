@@ -622,6 +622,11 @@
 
   #toast {
     position: fixed;
+    right: auto;   /* undoes the browser's popover defaults (centred, bordered) */
+    bottom: auto;
+    margin: 0;
+    border: 0;
+    overflow: visible;
     top: 33vh;
     top: 33dvh;
     left: 50%;
@@ -914,7 +919,7 @@
   </form>
 </dialog>
 
-<div id="toast" role="status" hidden></div>
+<div id="toast" role="status" popover="manual" hidden></div>
 
 <script>
   // Starting exercises for new users. They get cleaned into caps on the way in.
@@ -1605,15 +1610,18 @@
 
   // A workout is just a start and end time. Its sets are whatever was logged in between, so
   // logging doesn't change at all, and an unfinished workout survives the app being closed.
-  function workoutMinutes(start, end = Date.now()) {
-    return Math.max(1, Math.round((end - start) / 60000));
+  // "45 min", or "2 h 5 min" once it passes an hour.
+  function workoutLength(start, end = Date.now()) {
+    const minutes = Math.max(1, Math.round((end - start) / 60000));
+    if (minutes < 60) return `${minutes} min`;
+    return `${Math.floor(minutes / 60)} h${minutes % 60 ? ` ${minutes % 60} min` : ""}`;
   }
 
   function renderWorkoutButton(data = loadData()) {
     const button = document.getElementById("workout-button");
     const active = data.activeWorkout;
     button.classList.toggle("active", Boolean(active));
-    button.textContent = active ? `Finish workout · ${workoutMinutes(active.start)} min` : "Start workout";
+    button.textContent = active ? `Finish workout · ${workoutLength(active.start)}` : "Start workout";
   }
 
   // Every set logged between two times, grouped by exercise in the order each was first done.
@@ -1666,7 +1674,7 @@
     const groups = workoutSets(data, workout.start, workout.end);
     const sets = [...groups.values()].flat();
     const kg = Math.round(sets.reduce((sum, set) => sum + (set.reps && set.weight ? set.reps * set.weight : 0), 0));
-    const parts = [`${workoutMinutes(workout.start, workout.end)} min`, `${sets.length} ${sets.length === 1 ? "set" : "sets"}`];
+    const parts = [workoutLength(workout.start, workout.end), `${sets.length} ${sets.length === 1 ? "set" : "sets"}`];
     if (kg) parts.push(`${kg.toLocaleString()} kg moved`);
     document.getElementById("summary-stats").textContent = parts.join(" · ");
     list.replaceChildren(...[...groups].map(([name, exerciseSets], i) => {
@@ -2367,6 +2375,7 @@
   // Goes at once with an Undo, instead of asking first.
   function deleteExercise(name) {
     const splitIndex = currentSplit;
+    commitPendingUndo(); // saves (and redraws) any earlier delete first, so this row stays gone
     const row = settingsList.querySelector(`[data-delete-exercise="${CSS.escape(name)}"]`);
     if (row) row.closest(".edit-line").remove();
     offerUndo(`${name} removed`, () => {
@@ -2531,6 +2540,7 @@
 
   // Shared by the Delete button and swiping a row away in History.
   function deleteSet(exercise, id) {
+    commitPendingUndo(); // saves (and redraws) any earlier delete first, so this row stays gone
     const row = historyList.querySelector(`[data-edit-set="${CSS.escape(id)}"]`);
     if (row) row.remove();
     offerUndo("Set deleted", () => {
@@ -2581,6 +2591,17 @@
       toast.append(button);
     }
     toast.hidden = false;
+    // With a popup open, the message sits just above it, so it never hides the boxes.
+    const popup = document.querySelector("dialog[open]");
+    const popupTop = popup && !undo ? popup.getBoundingClientRect().top : 0;
+    toast.style.top = popupTop > 70 ? `${popupTop - 8}px` : "";
+    toast.style.translate = popupTop > 70 ? "0 -100%" : "";
+    // A popup sits in the browser's top layer, above the page. Showing the message as a
+    // popover puts it in that layer too, after the popup, so "Logged" shows on top of it.
+    try {
+      if (toast.matches(":popover-open")) toast.hidePopover();
+      toast.showPopover();
+    } catch { /* older phones: the message just shows on the page as before */ }
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => { toast.hidden = true; }, undo ? UNDO_MS : kind ? 1800 : 1200);
   }
