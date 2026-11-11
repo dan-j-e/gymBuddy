@@ -746,6 +746,11 @@
       <div id="split-list" class="edit-list"></div>
       <button id="add-split" class="settings-row no-arrow" data-add-split>+ Add split</button>
     </section>
+    <section>
+      <h2 class="settings-heading">Backup</h2>
+      <button id="export-data" class="settings-row">Export my data</button>
+      <p class="hint">Saves everything to a file you keep. Worth doing now and then, since there's no password on your nickname.</p>
+    </section>
   </div>
   <div class="bottom-bar">
     <button class="back" data-go="" aria-label="Back"><svg class="icon" aria-hidden="true"><use href="#i-back"/></svg></button>
@@ -2382,6 +2387,38 @@
     event.preventDefault();
     if (!newNicknameSave.disabled) saveNickname();
   });
+
+  // Everything on this phone, in one file. The wrapper says what it is, for importing later.
+  function backupFile() {
+    const data = loadData();
+    const name = cleanName(data.nickname || "me").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "me";
+    const payload = { app: "gym-buddy", format: 2, exportedAt: new Date().toISOString(), data };
+    return new File([JSON.stringify(payload, null, 2)], `gym-buddy-${name}-${todayLocal()}.json`, { type: "application/json" });
+  }
+
+  // Phones get the share sheet (Save to Files, AirDrop, Messages), because an installed iPhone
+  // app handles plain downloads badly. Anywhere without it, the file downloads.
+  async function exportData() {
+    const file = backupFile();
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      try {
+        await navigator.share({ files: [file], title: "Gym Buddy backup" });
+        return;
+      } catch (error) {
+        if (error.name === "AbortError") return; // closed the share sheet
+      }
+    }
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(file);
+    link.download = file.name;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(link.href), 10000);
+    showToast("backup saved");
+  }
+
+  document.getElementById("export-data").addEventListener("click", exportData);
 
   document.getElementById("redo-setup").addEventListener("click", () => {
     resetSetup();
