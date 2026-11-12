@@ -589,6 +589,13 @@
   .name-editor input { padding: 0 22px; text-transform: uppercase; }
   .name-editor input::placeholder { text-transform: none; }
   .name-editor #new-nickname { text-transform: none; } /* nicknames show as typed */
+  #log-import-text {
+    width: 100%; height: 132px; padding: 14px 16px; resize: none;
+    background: var(--pill); color: var(--text); border: 1px solid var(--line); border-radius: var(--radius, 8px);
+    font: inherit; font-size: 1rem; /* 16px or more stops iPhones zooming in */
+  }
+  #log-import-text:focus { outline: 1px solid var(--text); outline-offset: -1px; }
+  #log-import-preview { white-space: pre-line; overflow-wrap: anywhere; }
 
   .toggle {
     flex-shrink: 0;
@@ -1014,7 +1021,8 @@
       <input id="import-file" type="file" accept=".json,application/json" hidden>
       <button id="import-google" class="settings-row">Import weight from Google Health</button>
       <input id="google-file" type="file" accept=".csv,text/csv" hidden>
-      <p class="hint">Export saves everything to a file you keep. Import adds a backup's logs back in, without deleting anything you've logged since. For Google Health, pick weight.csv from your Google Takeout (Physical Activity, then Weight).</p>
+      <button id="import-log" class="settings-row">Import weight from a note or file</button>
+      <p class="hint">Export saves everything to a file you keep. Import adds a backup's logs back in, without deleting anything you've logged since. For Google Health, pick weight.csv from your Google Takeout (Physical Activity, then Weight). For a weight log kept anywhere else, like a table in Notes, paste it or pick the file: each line needs a date and a weight.</p>
     </section>
   </div>
   <div class="bottom-bar">
@@ -1135,6 +1143,16 @@
     <input id="body-height" type="text" inputmode="decimal" placeholder="Height in cm" aria-label="Height in centimetres" autocomplete="off">
     <p>Both optional. Each weight is added, and the chart uses each day's average.</p>
     <button id="body-save" class="primary">Save</button>
+  </form>
+</dialog>
+
+<dialog id="log-import" class="name-editor">
+  <form>
+    <textarea id="log-import-text" placeholder="Paste your weight log here, e.g.&#10;27 Feb  65.7&#10;1 Mar  65.5" aria-label="Weight log" autocomplete="off" autocorrect="off" spellcheck="false" autofocus></textarea>
+    <button id="log-import-file-pick" type="button" class="quiet">Or choose a file</button>
+    <input id="log-import-file" type="file" accept=".txt,.csv,.tsv,text/plain,text/csv" hidden>
+    <p id="log-import-preview"></p>
+    <button id="log-import-go" class="primary" disabled>Import</button>
   </form>
 </dialog>
 
@@ -3675,6 +3693,209 @@
       showToast(`${fresh.length} ${fresh.length === 1 ? "weigh-in" : "weigh-ins"} imported`);
       showScreen();
     }
+  });
+
+  // Weight logs kept anywhere else (a table in Notes, a spreadsheet, a text file). Everyone writes
+  // these differently, so each line is read for one date and one weight, whatever sits between
+  // them. No AI: an AI would need a paid key on a server and would send the log to an outside
+  // company, and it can quietly invent a number. This reads only what's there, shows what it
+  // found, and lists the lines it couldn't read.
+  const MONTH_NAMES = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+  const DAY_NAMES = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+  const POUNDS = /(^|[^a-z])(lbs?|pounds?)\b/;
+  const KILOS = /(^|[^a-z])(kgs?|kilos?|kilograms?)\b/;
+  const LB_TO_KG = 0.45359237;
+
+  // One line: its date (the year may be missing), any weekday written beside it, and its weight.
+  function readLogLine(line) {
+    let rest = ` ${line.toLowerCase().replace(/\u00a0/g, " ")} `;
+    rest = rest.replace(/\b\d{1,2}:\d{2}(:\d{2})?\s*(am|pm)?/g, " "); // times of day aren't weights
+    const month = "(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\\.?";
+    const forms = [
+      [/(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})(?!\d)/, (m) => ({ year: +m[1], month: +m[2], day: +m[3] })],
+      [/(^|[^\d.])(\d{1,2})\.(\d{1,2})\.(\d{4}|\d{2})(?![\d.])/, (m) => ({ first: +m[2], second: +m[3], year: +m[4] })],
+      [new RegExp(`(^|\\D)(\\d{1,2})(?:st|nd|rd|th)?\\s*(?:of\\s+)?-?${month}(?:[\\s,-]*(\\d{4}|'\\d{2})(?![\\d.]))?`),
+        (m) => ({ day: +m[2], month: MONTH_NAMES.indexOf(m[3]) + 1, year: m[4] ? +m[4].replace("'", "") : null })],
+      [new RegExp(`\\b${month}\\s*(\\d{1,2})(?:st|nd|rd|th)?(?![\\d.])(?:,?\\s*(\\d{4})(?![\\d.]))?`),
+        (m) => ({ day: +m[2], month: MONTH_NAMES.indexOf(m[1]) + 1, year: m[3] ? +m[3] : null })],
+      [/(^|[^\d.])(\d{1,2})[/-](\d{1,2})(?:[/-](\d{4}|\d{2}))?(?![\d.])/, (m) => ({ first: +m[2], second: +m[3], year: m[4] ? +m[4] : null })],
+    ];
+    let date = null;
+    for (const [pattern, read] of forms) {
+      const match = rest.match(pattern);
+      if (!match) continue;
+      date = read(match);
+      rest = rest.replace(match[0], " ");
+      break;
+    }
+    if (!date) return null;
+    if (date.year !== null && date.year < 100) date.year += 2000;
+    const weekday = rest.match(/\b(sun|mon|tue|wed|thu|fri|sat)[a-z]*\b/);
+    if (weekday) date.weekday = DAY_NAMES.indexOf(weekday[1]);
+    const unit = POUNDS.test(rest) ? "lb" : KILOS.test(rest) ? "kg" : null;
+    const numbers = [...rest.matchAll(/(^|[^\d.])(\d{2,3}(?:[.,]\d{1,2})?)(?![\d])/g)].map((m) => Number(m[2].replace(",", ".")));
+    const weight = numbers.find((n) => n >= 20 && n <= 900);
+    return weight === undefined ? null : { ...date, weight, unit };
+  }
+
+  function realDate(year, month, day) {
+    const date = new Date(year, month - 1, day);
+    return date.getMonth() === month - 1 && date.getDate() === day ? date : null;
+  }
+
+  function readWeightLog(text) {
+    if (/^\uFEFF?timestamp,weight grams\b/i.test(text.trim())) return { entries: googleWeighIns(text), skipped: [] };
+    const lines = text.replace(/^\uFEFF/, "").split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    const rows = [];
+    const skipped = [];
+    let poundsHeading = false;
+    for (const line of lines) {
+      const row = readLogLine(line);
+      if (row) rows.push(row);
+      else if (/\d/.test(line)) skipped.push(line);
+      else if (POUNDS.test(line.toLowerCase())) poundsHeading = true; // e.g. a "Weight (lbs)" heading
+    }
+
+    // 03/04: day first, as in Australia, unless the log itself shows otherwise.
+    const numeric = rows.filter((row) => row.first !== undefined);
+    const monthFirst = !numeric.some((row) => row.first > 12) && numeric.some((row) => row.second > 12);
+    numeric.forEach((row) => {
+      row.day = monthFirst ? row.second : row.first;
+      row.month = monthFirst ? row.first : row.second;
+    });
+
+    // A missing year: dates are read in order, and a big jump backwards (December to January) starts
+    // a new year. Then the year is picked so written weekdays match, and nothing lands in the future.
+    const yearless = rows.filter((row) => row.year === null);
+    if (yearless.length) {
+      const order = (row) => row.month * 32 + row.day;
+      // Which way the log runs comes from the small steps; with none to go on, oldest first.
+      let rising = 0;
+      for (let i = 1; i < yearless.length; i++) {
+        const step = order(yearless[i]) - order(yearless[i - 1]);
+        if (Math.abs(step) <= 64) rising += Math.sign(step);
+      }
+      let offset = 0;
+      yearless.forEach((row, i) => {
+        if (i > 0) {
+          const step = order(row) - order(yearless[i - 1]);
+          if (rising >= 0 && step < -64) offset++;
+          if (rising < 0 && step > 64) offset--;
+        }
+        row.offset = offset;
+      });
+      const tomorrow = new Date();
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      const thisYear = new Date().getFullYear();
+      let best = null;
+      for (let base = thisYear + 1; base >= thisYear - 20; base--) {
+        let score = 0;
+        let future = false;
+        for (const row of yearless) {
+          const date = realDate(base + row.offset, row.month, row.day);
+          if (!date) { score -= 2; continue; }
+          if (date > tomorrow) future = true;
+          if (row.weekday !== undefined) score += date.getDay() === row.weekday ? 1 : 0;
+        }
+        if (!future && (!best || score > best.score)) best = { base, score };
+      }
+      yearless.forEach((row) => { row.year = best ? best.base + row.offset : thisYear; });
+    }
+
+    const counts = {};
+    const entries = [];
+    rows.forEach((row) => {
+      const date = realDate(row.year, row.month, row.day);
+      const pounds = row.unit === "lb" || (row.unit === null && poundsHeading);
+      const weight = Math.round((pounds ? row.weight * LB_TO_KG : row.weight) * 10) / 10;
+      if (!date || !(weight >= 20 && weight <= 400)) return;
+      // Same date and position give the same id, so pasting an updated log later only adds new lines.
+      const day = localDate(date);
+      counts[day] = (counts[day] || 0) + 1;
+      entries.push({ id: `${date.getTime().toString(36)}-t${counts[day]}`, date: day, weight, pounds });
+    });
+    return { entries, skipped };
+  }
+
+  // Which weigh-ins are new: not already here, not deleted before, and not the same weight on the same day.
+  function newWeighIns(entries, data) {
+    const known = new Set([...(data.body || []).map((entry) => entry.id), ...(data.deleted || [])]);
+    const sameDay = new Set((data.body || []).map((entry) => `${entry.date} ${entry.weight}`));
+    return entries
+      .filter((entry) => !known.has(entry.id) && !sameDay.has(`${entry.date} ${entry.weight}`))
+      .map(({ id, date, weight }) => ({ id, date, weight }))
+      .sort((a, b) => loggedAt(a) - loggedAt(b));
+  }
+
+  const logImport = document.getElementById("log-import");
+  const logImportText = document.getElementById("log-import-text");
+  const logImportFile = document.getElementById("log-import-file");
+  const logImportPreview = document.getElementById("log-import-preview");
+  const logImportGo = document.getElementById("log-import-go");
+  let logImportFound = [];
+
+  function updateLogImport() {
+    const text = logImportText.value;
+    logImportFound = [];
+    logImportGo.disabled = true;
+    logImportGo.textContent = "Import";
+    if (!text.trim()) {
+      logImportPreview.textContent = "Each line needs a date and a weight. Years, weekdays, kg and lb are all fine.";
+      return;
+    }
+    const { entries, skipped } = readWeightLog(text);
+    const fresh = newWeighIns(entries, loadData());
+    const lines = [];
+    if (entries.length === 0) {
+      lines.push("No dates with weights found. Each line needs both, like 27 Feb 65.7.");
+    } else {
+      const range = `${formatDate(entries[0].date)} to ${formatDate(entries[entries.length - 1].date)}`;
+      lines.push(`Read ${entries.length} ${entries.length === 1 ? "weigh-in" : "weigh-ins"}, ${entries.length === 1 ? formatDate(entries[0].date) : range}.`);
+      lines.push(`First: ${formatDate(entries[0].date)}, ${entries[0].weight} kg. Last: ${formatDate(entries[entries.length - 1].date)}, ${entries[entries.length - 1].weight} kg.`);
+      if (entries.some((entry) => entry.pounds)) lines.push("Pounds changed to kg.");
+      if (fresh.length < entries.length) lines.push(`${entries.length - fresh.length} already here, so skipped.`);
+    }
+    if (skipped.length) {
+      const shown = skipped.slice(0, 3).map((line) => `"${line.length > 40 ? `${line.slice(0, 40)}…` : line}"`).join(", ");
+      lines.push(`Couldn't read ${skipped.length} ${skipped.length === 1 ? "line" : "lines"}: ${shown}${skipped.length > 3 ? "…" : ""}`);
+    }
+    logImportPreview.textContent = lines.join("\n");
+    logImportFound = fresh;
+    if (fresh.length) {
+      logImportGo.disabled = false;
+      logImportGo.textContent = `Import ${fresh.length}`;
+    }
+  }
+
+  document.getElementById("import-log").addEventListener("click", () => {
+    logImportText.value = "";
+    updateLogImport();
+    openPopup(logImport);
+  });
+  logImportText.addEventListener("input", updateLogImport);
+  document.getElementById("log-import-file-pick").addEventListener("click", () => {
+    logImportFile.value = "";
+    logImportFile.click();
+  });
+  logImportFile.addEventListener("change", async () => {
+    const file = logImportFile.files[0];
+    if (!file) return;
+    logImportText.value = (await file.text()).slice(0, 200000);
+    updateLogImport();
+  });
+
+  // The preview is the question, so Import saves straight away.
+  logImport.querySelector("form").addEventListener("submit", (event) => {
+    event.preventDefault();
+    if (logImportGo.disabled) return;
+    const fresh = newWeighIns(logImportFound, loadData()); // checked again, in case a sync landed meanwhile
+    const saved = updateData((data) => {
+      data.body = [...(data.body || []), ...fresh].sort((a, b) => loggedAt(a) - loggedAt(b));
+    }, false);
+    if (!saved) return;
+    logImport.close();
+    showToast(`${fresh.length} ${fresh.length === 1 ? "weigh-in" : "weigh-ins"} imported`);
+    showScreen();
   });
 
   document.getElementById("redo-setup").addEventListener("click", () => {
