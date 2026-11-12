@@ -355,11 +355,11 @@
   .metric-line { flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 8px; }
   .metric-line .metric-row { margin-top: 0; }
   .range-row { flex-shrink: 0; display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; margin-top: 10px; }
-  .range-row button { min-height: 44px; padding: 4px 2px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; background: none; color: var(--text); }
-  .range-row b { font-size: 0.85rem; font-weight: 600; }
-  .range-row small { font-size: 0.72rem; color: var(--muted); white-space: nowrap; }
-  .range-row button.chosen { background: var(--text); color: var(--bg); border-color: var(--text); }
-  .range-row button.chosen small { color: var(--bg); }
+  .range-row button { min-height: 34px; padding: 0 2px; background: none; color: var(--text); font-size: 0.85rem; font-weight: 600; white-space: nowrap; }
+  .range-row button.chosen { background: var(--text); color: var(--bg); border-color: var(--text); font-size: 0.78rem; }
+  /* Show numbers takes over the card below the top line: the ranges and chart give way to the table. */
+  #progress-area .chart-card:has(details[open]) .range-row,
+  #progress-area .chart-card:has(details[open]) .chart-readout { display: none; }
   .metric-button { flex-shrink: 0; min-height: 44px; padding: 0 16px; font-size: 0.95rem; }
   /* Opening "Show numbers" swaps the chart for the table, so the card never grows. */
   #progress-area .chart-card:has(details[open]) .chart-slot { display: none; }
@@ -2181,7 +2181,7 @@
     // Holds the readout's line before the chart is drawn, so the chart is sized for the space left.
     const readoutSpace = chartReadout("\u00a0");
 
-    // The range picker doubles as a summary: each button shows the change over its range.
+    // The range picker: tap a range to chart it; the chosen one shows the change over it.
     const chosen = WEIGHT_RANGES.find(([label]) => label === weightRange()) || WEIGHT_RANGES[1];
     const series = weightSeries(entries, chosen);
     if (entries.length > 0) {
@@ -2192,12 +2192,10 @@
         button.type = "button";
         button.classList.toggle("chosen", range === chosen);
         button.dataset.weightRange = range[0];
-        const name = document.createElement("b");
-        name.textContent = range[0];
-        const change = document.createElement("small");
-        change.textContent = weightChange(weightSeries(entries, range));
-        button.append(name, change);
-        button.setAttribute("aria-label", `${range[2]}: ${change.textContent}`);
+        // The chosen range shows its change in place of its name.
+        const change = weightChange(weightSeries(entries, range));
+        button.textContent = range === chosen ? change : range[0];
+        button.setAttribute("aria-label", `${range[2]}: ${change}`);
         return button;
       }));
       card.append(line, ranges, slot, readoutSpace);
