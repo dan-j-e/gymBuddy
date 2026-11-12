@@ -806,7 +806,9 @@
       <button id="export-data" class="settings-row">Export my data</button>
       <button id="import-data" class="settings-row">Import a backup</button>
       <input id="import-file" type="file" accept=".json,application/json" hidden>
-      <p class="hint">Export saves everything to a file you keep. Import adds a backup's logs back in, without deleting anything you've logged since.</p>
+      <button id="import-google" class="settings-row">Import weight from Google Health</button>
+      <input id="google-file" type="file" accept=".csv,text/csv" hidden>
+      <p class="hint">Export saves everything to a file you keep. Import adds a backup's logs back in, without deleting anything you've logged since. For Google Health, pick weight.csv from your Google Takeout (Physical Activity, then Weight).</p>
     </section>
   </div>
   <div class="bottom-bar">
@@ -3094,6 +3096,56 @@
     }, false);
     if (saved) {
       showToast("Backup imported");
+      showScreen();
+    }
+  });
+
+  // Google Takeout's weight.csv: "timestamp,weight grams,data source", times in UTC.
+  // Each weigh-in's id is made from its own timestamp, so importing a newer export later only
+  // adds what's new, and one deleted here stays deleted. The id starts with the time, like ours.
+  function googleWeighIns(text) {
+    const lines = text.replace(/^\uFEFF/, "").trim().split(/\r?\n/);
+    if (!/^timestamp,weight grams\b/i.test(lines[0] || "")) return null;
+    const entries = new Map();
+    for (const line of lines.slice(1)) {
+      const [timestamp, grams] = line.split(",");
+      const time = Date.parse(timestamp);
+      const weight = Math.round(Number(grams) / 100) / 10; // to the nearest 0.1 kg
+      if (!Number.isFinite(time) || !(weight > 0 && weight < 500)) continue;
+      const id = `${time.toString(36)}-g`;
+      entries.set(id, { id, date: localDate(new Date(time)), weight }); // the phone's own date, not UTC's
+    }
+    return [...entries.values()];
+  }
+
+  const googleFile = document.getElementById("google-file");
+  document.getElementById("import-google").addEventListener("click", () => {
+    googleFile.value = "";
+    googleFile.click();
+  });
+
+  googleFile.addEventListener("change", async () => {
+    const file = googleFile.files[0];
+    if (!file) return;
+    const found = googleWeighIns(await file.text());
+    if (!found) {
+      askConfirm("That isn't Google Health's weight.csv. In your Takeout, it's under Physical Activity, then Weight.", { alertOnly: true });
+      return;
+    }
+    const current = loadData();
+    const known = new Set([...(current.body || []).map((entry) => entry.id), ...(current.deleted || [])]);
+    const fresh = found.filter((entry) => !known.has(entry.id)).sort((a, b) => loggedAt(a) - loggedAt(b));
+    if (fresh.length === 0) {
+      showToast("No new weigh-ins in that file");
+      return;
+    }
+    const range = fresh.length === 1 ? formatDate(fresh[0].date) : `${formatDate(fresh[0].date)} to ${formatDate(fresh[fresh.length - 1].date)}`;
+    if (!(await askConfirm(`Add ${fresh.length} ${fresh.length === 1 ? "weigh-in" : "weigh-ins"} from Google Health (${range})?`, { ok: "Import" }))) return;
+    const saved = updateData((data) => {
+      data.body = [...(data.body || []), ...fresh].sort((a, b) => loggedAt(a) - loggedAt(b));
+    }, false);
+    if (saved) {
+      showToast(`${fresh.length} ${fresh.length === 1 ? "weigh-in" : "weigh-ins"} imported`);
       showScreen();
     }
   });
