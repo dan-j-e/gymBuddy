@@ -867,7 +867,7 @@
   <div id="bubbles"></div>
   <div class="bottom-bar">
     <button class="back" data-go="" aria-label="Back"><svg class="icon" aria-hidden="true"><use href="#i-back"/></svg></button>
-    <button id="settings-link" class="wide-pill">Settings</button>
+    <button id="settings-link" class="wide-pill">Edit exercises</button>
   </div>
 </main>
 
@@ -1646,7 +1646,7 @@
   }
 
   function renderSettings(data, split, index) {
-    document.getElementById("settings-title").textContent = `${split.name} settings`;
+    document.getElementById("settings-title").textContent = `Edit ${split.name}`;
     document.getElementById("settings-back").dataset.go = index;
     settingsList.replaceChildren(...split.exercises.map((name) => {
       const row = document.createElement("button");
@@ -1795,7 +1795,7 @@
         d.deleted = [...(d.deleted || []), active.id].sort();
         delete d.activeWorkout;
       }, false);
-      if (ended) go("");
+      if (ended) goBack(""); // back to where the workout was opened from, leaving nothing behind
       return;
     }
     const saved = updateData((d) => {
@@ -1810,6 +1810,14 @@
   // "#summary/<id>" shows one past workout, opened from Past workouts, and goes back there.
   function renderSummary(data, pastId = "") {
     const past = pastId ? (data.workouts || []).find((workout) => workout.id === pastId) : null;
+    if (pastId && !past) {
+      document.getElementById("summary-title").textContent = "Workout not found";
+      document.getElementById("summary-stats").textContent = "It may have been removed on another phone.";
+      document.getElementById("summary-back").dataset.go = "workouts";
+      document.getElementById("finish-workout").hidden = true;
+      document.getElementById("summary-list").replaceChildren();
+      return;
+    }
     const active = past ? null : data.activeWorkout;
     const workout = past || (active ? { ...active, end: Date.now() } : (data.workouts || [])[(data.workouts || []).length - 1]);
     const list = document.getElementById("summary-list");
@@ -1880,7 +1888,7 @@
   }
 
   // One row per exercise (and per tag), A to Z. Only sets of the exercise's current kind count,
-  // like its chart. Tapping a row opens that exercise's History on the same tag.
+  // like its chart. Tapping a row opens that exercise's History on the same tag, and Back returns here.
   function renderPbs(data) {
     const rows = [];
     for (const name of Object.keys(data.sets).sort()) {
@@ -1903,13 +1911,12 @@
     hint.className = "hint";
     hint.textContent = "Tap one to see its history.";
     list.replaceChildren(hint, ...rows.map(({ name, tag, kind, best }) => {
-      const split = data.splits.findIndex((s) => s.exercises.includes(name));
-      const row = document.createElement(split >= 0 ? "button" : "div");
+      // History lives under a split; one no longer in any split opens under the first.
+      const split = Math.max(0, data.splits.findIndex((s) => s.exercises.includes(name)));
+      const row = document.createElement("button");
       row.className = "edit-row";
-      if (split >= 0) {
-        row.dataset.pbTag = tag;
-        row.dataset.go = `${split}/history/${encodeURIComponent(name)}`;
-      }
+      row.dataset.pbTag = tag;
+      row.dataset.go = `${split}/history/${encodeURIComponent(name)}`;
       const label = document.createElement("span");
       label.textContent = tag ? `${name} · ${tag}` : name;
       const detail = document.createElement("small");
@@ -2486,7 +2493,7 @@
         try {
           currentExercise = decodeURIComponent(splitRoute[2].slice("history/".length));
         } catch {
-          location.hash = currentSplit; // a broken link: show the split instead
+          replaceRoute(String(currentSplit)); // a broken link: show the split instead
           return;
         }
         renderHistory(data, currentExercise, currentSplit);
@@ -2557,9 +2564,43 @@
     }
   });
 
+  // Navigation. Every screen is a step in the phone's own back history, numbered by `depth`
+  // (0 is the first screen opened). go() adds a step. The app's Back buttons step back for real
+  // when there's an earlier step in the app, so they always agree with the phone's back swipe;
+  // opened straight from a link, there's nothing to step back to, so Back goes to the screen's parent.
+  function navDepth() {
+    return (history.state && history.state.depth) || 0;
+  }
+
+  function routeUrl(route) {
+    return route ? `#${route}` : location.pathname + location.search;
+  }
+
+  function routeChanged() {
+    reordering = false;
+    showScreen();
+    applyUpdateIfSafe();
+  }
+
   function go(route) {
-    if (location.hash.slice(1) === route) showScreen();
-    else location.hash = route;
+    if (location.hash.slice(1) === route) {
+      showScreen();
+      return;
+    }
+    history.pushState({ depth: navDepth() + 1 }, "", routeUrl(route));
+    routeChanged();
+  }
+
+  // Swaps the current step for another, for screens that are finished with (like setup once
+  // it's done), so swiping back can't land on them again.
+  function replaceRoute(route) {
+    history.replaceState({ depth: navDepth() }, "", routeUrl(route));
+    routeChanged();
+  }
+
+  function goBack(parent) {
+    if (navDepth() > 0) history.back();
+    else replaceRoute(parent);
   }
 
   const NICKNAME_NOTE = "Your logs are saved online under this nickname, so you can get them back on any phone. There's no password, so anyone who types it can see them.";
@@ -3124,7 +3165,10 @@
   document.addEventListener("click", (event) => {
     const button = event.target.closest("button");
     if (!button) return;
-    if (button.dataset.go !== undefined) go(button.dataset.go);
+    if (button.dataset.go !== undefined) {
+      if (button.classList.contains("back")) goBack(button.dataset.go); // data-go is the fallback parent
+      else go(button.dataset.go);
+    }
     if (button.dataset.split) go(button.dataset.split);
     if (button.dataset.exercise) openLog(button.dataset.exercise);
     if (button.dataset.edit) openEditor(button.dataset.edit);
@@ -3182,7 +3226,7 @@
       Object.assign(data, remote ? mergeData(data, remote) : { nickname });
       if (userId) data.userId = userId;
     }, false);
-    if (saved) go("");
+    if (saved) replaceRoute("");
   });
 
   splitCount.addEventListener("input", updateSplitCount);
@@ -3202,7 +3246,7 @@
     });
     if (!saved) return;
     resetSetup(); // so swiping back later doesn't show the old answers
-    go("");
+    replaceRoute(""); // setup is finished with, so the back swipe can't reopen it
   });
 
   editorName.addEventListener("input", updateEditor);
@@ -3673,11 +3717,8 @@
     if (navigator.serviceWorker && navigator.serviceWorker.controller) fetch("./").catch(() => {});
   }
 
-  window.addEventListener("hashchange", () => {
-    reordering = false;
-    showScreen();
-    applyUpdateIfSafe();
-  });
+  // The back swipe (and any typed link) arrives here; go() handles its own.
+  window.addEventListener("hashchange", routeChanged);
   window.addEventListener("online", syncNow);
   // Charts are drawn to fit, so a rotation or window resize needs a fresh drawing.
   let resizeTimer;
