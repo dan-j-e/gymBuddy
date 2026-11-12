@@ -502,6 +502,7 @@
     text-align: left;
   }
   .edit-list > .edit-row { flex: 0 0 auto; } /* in a line it shares the width; alone it keeps its height */
+  #pb-list > .edit-row, #workout-list > .edit-row { flex: 0 0 auto; } /* short lists don't stretch to fill the screen */
 
   .edit-row .set-date {
     display: block;
@@ -782,7 +783,14 @@
   <div class="bottom-bar">
     <button class="back" data-go="" aria-label="Back"><svg class="icon" aria-hidden="true"><use href="#i-back"/></svg></button>
     <button class="wide-pill" data-go="workouts">Past workouts</button>
+    <button class="wide-pill" data-go="pbs">PBs</button>
   </div>
+</main>
+
+<main id="pbs" class="screen" hidden>
+  <h1>PBs</h1>
+  <div id="pb-list" class="scroll-area"></div>
+  <button class="back" data-go="progress" aria-label="Back"><svg class="icon" aria-hidden="true"><use href="#i-back"/></svg></button>
 </main>
 
 <main id="workouts" class="screen" hidden>
@@ -1840,6 +1848,88 @@
     }));
   }
 
+  // PBs. What counts as best, by kind, compared left to right: reps + kg is the heaviest weight,
+  // then the most reps at it (so bodyweight sets only win on reps); reps + cm the highest, then reps;
+  // time the longest; distance and treadmill the furthest single set.
+  function pbScore(set, kind) {
+    if (setKind(set) !== kind) return null;
+    if (kind === "strength") return [set.weight, set.reps];
+    if (kind === "reps") return [set.reps];
+    if (kind === "height") return [set.height, set.reps];
+    if (kind === "time") return [set.minutes * 60 + set.seconds];
+    if (kind === "distance") return [set.km];
+    return [Math.round((set.speed * set.minutes) / 60 * 100) / 100]; // treadmill: km covered
+  }
+
+  function isBetter(score, than) {
+    for (let i = 0; i < score.length; i++) {
+      if (score[i] !== than[i]) return score[i] > than[i];
+    }
+    return false; // a tie keeps the first time it was done
+  }
+
+  // The best set of one kind and tag, or null if there are none.
+  function bestSet(sets, kind, tag) {
+    let best = null;
+    for (const set of sets) {
+      const score = pbScore(set, kind);
+      if (!score || (set.tag || "") !== tag) continue;
+      if (!best || isBetter(score, pbScore(best, kind))) best = set;
+    }
+    return best;
+  }
+
+  // One row per exercise (and per tag), A to Z. Only sets of the exercise's current kind count,
+  // like its chart. Tapping a row opens that exercise's History on the same tag.
+  function renderPbs(data) {
+    const rows = [];
+    for (const name of Object.keys(data.sets).sort()) {
+      const kind = exerciseKind(data, name);
+      const tags = [...new Set(data.sets[name].map((set) => set.tag || ""))].sort();
+      for (const tag of tags) {
+        const best = bestSet(data.sets[name], kind, tag);
+        if (best) rows.push({ name, tag, kind, best });
+      }
+    }
+    const list = document.getElementById("pb-list");
+    if (rows.length === 0) {
+      const hint = document.createElement("p");
+      hint.className = "hint";
+      hint.textContent = "Log some sets and your bests show up here.";
+      list.replaceChildren(hint);
+      return;
+    }
+    const hint = document.createElement("p");
+    hint.className = "hint";
+    hint.textContent = "Tap one to see its history.";
+    list.replaceChildren(hint, ...rows.map(({ name, tag, kind, best }) => {
+      const split = data.splits.findIndex((s) => s.exercises.includes(name));
+      const row = document.createElement(split >= 0 ? "button" : "div");
+      row.className = "edit-row";
+      if (split >= 0) {
+        row.dataset.pbTag = tag;
+        row.dataset.go = `${split}/history/${encodeURIComponent(name)}`;
+      }
+      const label = document.createElement("span");
+      label.textContent = tag ? `${name} · ${tag}` : name;
+      const detail = document.createElement("small");
+      detail.className = "set-date";
+      const distance = kind === "cardio" ? `${pbScore(best, kind)[0]} km · ` : "";
+      detail.textContent = `${distance}${describeSet(best)} · ${formatDate(best.date)}`;
+      label.append(detail);
+      row.append(label);
+      return row;
+    }));
+  }
+
+  // Opening History from a PB shows that PB's tag. Runs before the row's own navigation.
+  document.getElementById("pb-list").addEventListener("click", (event) => {
+    const row = event.target.closest("[data-pb-tag]");
+    if (!row) return;
+    historyTag = row.dataset.pbTag;
+    historyTagFor = decodeURIComponent(row.dataset.go.split("/history/")[1]);
+  }, true);
+
   // "Thu 12 Nov", plus the year if it isn't this one.
   function workoutDay(workout) {
     const start = new Date(workout.start);
@@ -2414,6 +2504,9 @@
     } else if (route === "summary" || route.startsWith("summary/")) {
       renderSummary(data, route.slice("summary/".length));
       showOnly("summary");
+    } else if (route === "pbs") {
+      renderPbs(data);
+      showOnly("pbs");
     } else if (route === "workouts") {
       renderWorkoutList(data);
       showOnly("workouts");
@@ -2915,11 +3008,14 @@
     const note = logNote.value.trim().slice(0, 100);
     if (note) set.note = note;
 
+    // A PB needs something to beat: the first set of a kind and tag is just logged.
+    const before = bestSet(loadData().sets[currentExercise] || [], currentKind, set.tag || "");
+    const beatsBest = Boolean(before) && pbScore(set, currentKind) && isBetter(pbScore(set, currentKind), pbScore(before, currentKind));
     const saved = updateData((data) => {
       data.sets[currentExercise] = data.sets[currentExercise] || [];
       data.sets[currentExercise].push(set);
     }, false);
-    if (saved) showToast(`Logged ${currentExercise}`, "success");
+    if (saved) showToast(`${beatsBest ? "New PB" : "Logged"} ${currentExercise}`, "success");
     if (saved && loadData().stayOpen !== false) { // stays open unless switched off in settings
       // Ready for the next set: boxes cleared, hints and ↻ now showing this set.
       prepareLog(currentExercise);
