@@ -724,6 +724,14 @@
   .tag-row button.chosen { background: var(--text); color: var(--bg); border-color: var(--text); }
   .tag-row button .icon { width: 14px; height: 14px; }
   #history-tags { margin-bottom: 4px; }
+  /* The dotted add box at the end of a split's exercises. */
+  #bubbles .add-box {
+    flex-shrink: 0; min-height: 76px; padding: 10px 22px;
+    border: 2px dashed var(--muted); background: none; color: var(--text);
+    font-size: 1.1rem; font-weight: 500; text-align: left;
+  }
+  #bubbles .add-box:active { background: #222; }
+  #bubbles #add-first { min-height: 96px; text-align: center; }
 </style>
 </head>
 <body>
@@ -1584,12 +1592,13 @@
     reorderToggle.hidden = split.exercises.length < 2;
     reorderToggle.textContent = reordering ? "Done" : "Reorder";
     reorderToggle.classList.toggle("chosen", reordering);
+    // A dotted "+ Add exercise" box ends the list, so adding never needs a trip to Edit exercises.
+    const add = document.createElement("button");
+    add.className = "add-box";
+    add.dataset.add = "";
+    add.textContent = "+ Add exercise";
     if (split.exercises.length === 0) {
-      const add = document.createElement("button");
       add.id = "add-first";
-      add.className = "primary";
-      add.dataset.add = "";
-      add.textContent = "+ Add exercise";
       bubbles.replaceChildren(add);
       return;
     }
@@ -1612,7 +1621,7 @@
         return bubble;
       }
       return editLine(bubble, "exercises", i, split.exercises.length);
-    }));
+    }), ...(reordering ? [] : [add]));
   }
 
   // A coral ✕ for a settings row. `field` says what tapping it deletes.
