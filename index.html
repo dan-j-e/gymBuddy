@@ -732,6 +732,12 @@
   }
   #bubbles .add-box:active { background: #222; }
   #bubbles #add-first { min-height: 96px; text-align: center; }
+  /* Drag to reorder. The handle claims the touch so the page doesn't scroll instead. */
+  .grip { touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; cursor: grab; }
+  .reordering > .edit-line { transition: transform 0.15s ease-out; }
+  .reordering > .edit-line.lifted { transition: none; position: relative; z-index: 2; }
+  .edit-line.lifted > * { background: #2a2a2a; border-color: var(--text); }
+  .edit-line.lifted .grip { cursor: grabbing; }
 </style>
 </head>
 <body>
@@ -739,8 +745,7 @@
 <!-- One icon set, so every symbol has the same size, stroke and ends. Drawn with currentColor. -->
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
   <symbol id="i-back" viewBox="0 0 24 24"><path d="M19 12H5M11 6l-6 6 6 6"/></symbol>
-  <symbol id="i-up" viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></symbol>
-  <symbol id="i-down" viewBox="0 0 24 24"><path d="M12 5v14M6 13l6 6 6-6"/></symbol>
+  <symbol id="i-grip" viewBox="0 0 24 24"><path d="M5 8h14M5 12h14M5 16h14"/></symbol>
   <symbol id="i-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
   <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
   <symbol id="i-repeat" viewBox="0 0 24 24"><path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3M19.5 4v5h-5"/></symbol>
@@ -829,7 +834,7 @@
     </section>
     <section>
       <h2 class="settings-heading">Splits</h2>
-      <p class="hint">Tap a split to rename it.</p>
+      <p class="hint">Tap a split to rename it, or drag its handle to reorder.</p>
       <div id="split-list" class="edit-list"></div>
       <button id="add-split" class="settings-row no-arrow" data-add-split>+ Add split</button>
     </section>
@@ -1545,7 +1550,7 @@
   let currentFields = STRENGTH_FIELDS;
   let currentKind = "strength";
   let currentSplit = null;
-  let reordering = false; // the exercise screen is showing move arrows
+  let reordering = false; // the exercise screen is showing drag handles
   let editingSplit = null; // null means the split popup is adding a new split
   let editingSetId = null; // null means the log popup is logging a new set
   let editingName = null; // null means the editor is adding a new exercise
@@ -1635,24 +1640,104 @@
     return button;
   }
 
-  // A tappable row with up and down arrows. `scope` says which list the arrows reorder.
+  // A row with a drag handle. `scope` says which list it reorders. A list of one has nothing
+  // to reorder, so its handle is greyed out.
   function editLine(row, scope, index, count) {
     const line = document.createElement("div");
     line.className = "edit-line";
-    const arrow = (text, label, delta, disabled) => {
-      const button = document.createElement("button");
-      button.className = "move";
-      button.append(icon(text));
-      button.setAttribute("aria-label", label);
-      button.dataset.move = delta;
-      button.dataset.scope = scope;
-      button.dataset.index = index;
-      button.disabled = disabled;
-      return button;
-    };
-    line.append(row, arrow("up", "Move up", -1, index === 0), arrow("down", "Move down", 1, index === count - 1));
+    const grip = document.createElement("button");
+    grip.className = "move grip";
+    grip.append(icon("grip"));
+    grip.setAttribute("aria-label", "Drag to reorder");
+    grip.dataset.scope = scope;
+    grip.dataset.index = index;
+    grip.disabled = count < 2;
+    line.append(row, grip);
     return line;
   }
+
+  // Drag to reorder: hold a row's handle and move it. Only the handle drags, so the rest of
+  // the row still scrolls the list. The other rows slide aside to show where it will land, and
+  // the list scrolls itself when the finger nears its top or bottom edge.
+  const DRAG_EDGE_PX = 56;
+  let drag = null;
+
+  function dragTarget() {
+    const { list, lines, rects, from, startY, startScroll, y } = drag;
+    const dy = y - startY + (list.scrollTop - startScroll);
+    const centre = rects[from].top + rects[from].height / 2 + dy;
+    let to = 0;
+    lines.forEach((line, i) => {
+      if (i !== from && rects[i].top + rects[i].height / 2 < centre) to++;
+    });
+    return { dy, to };
+  }
+
+  function updateDrag() {
+    const { lines, rects, from } = drag;
+    const { dy, to } = dragTarget();
+    const step = rects[from].height + (lines.length > 1 ? Math.abs(rects[1].top - rects[0].bottom) : 0);
+    drag.to = to;
+    lines.forEach((line, i) => {
+      let shift = 0;
+      if (i === from) shift = dy;
+      else if (from < i && i <= to) shift = -step;
+      else if (to <= i && i < from) shift = step;
+      line.style.transform = shift ? `translateY(${shift}px)` : "";
+    });
+  }
+
+  function dragScroll() {
+    if (!drag) return;
+    const box = drag.list.getBoundingClientRect();
+    const speed = drag.y < box.top + DRAG_EDGE_PX ? -8 : drag.y > box.bottom - DRAG_EDGE_PX ? 8 : 0;
+    if (speed) {
+      const before = drag.list.scrollTop;
+      drag.list.scrollTop += speed;
+      if (drag.list.scrollTop !== before) updateDrag();
+    }
+    drag.frame = requestAnimationFrame(dragScroll);
+  }
+
+  document.addEventListener("pointerdown", (event) => {
+    const grip = event.target.closest && event.target.closest(".grip");
+    if (!grip || grip.disabled) return;
+    if (drag) endDrag({ type: "pointercancel", pointerId: drag.pointerId }); // never let a lost drag block the next
+    event.preventDefault();
+    const line = grip.closest(".edit-line");
+    const list = line.parentElement;
+    const lines = [...list.children].filter((child) => child.classList.contains("edit-line"));
+    drag = {
+      grip, list, lines,
+      rects: lines.map((child) => child.getBoundingClientRect()),
+      from: lines.indexOf(line), to: lines.indexOf(line),
+      scope: grip.dataset.scope, pointerId: event.pointerId,
+      startY: event.clientY, y: event.clientY, startScroll: list.scrollTop,
+    };
+    try { grip.setPointerCapture(event.pointerId); } catch {} // keeps following the finger off the handle
+    list.classList.add("reordering");
+    line.classList.add("lifted");
+    drag.frame = requestAnimationFrame(dragScroll);
+  });
+
+  document.addEventListener("pointermove", (event) => {
+    if (!drag || event.pointerId !== drag.pointerId) return;
+    drag.y = event.clientY;
+    updateDrag();
+  });
+
+  function endDrag(event) {
+    if (!drag || event.pointerId !== drag.pointerId) return;
+    const { list, lines, from, to, scope } = drag;
+    cancelAnimationFrame(drag.frame);
+    drag = null;
+    list.classList.remove("reordering");
+    lines.forEach((line) => { line.style.transform = ""; line.classList.remove("lifted"); });
+    // If a sync redrew the list mid-drag, the old positions no longer apply.
+    if (event.type === "pointerup" && to !== from && lines[from].isConnected) moveItem(scope, from, to);
+  }
+  document.addEventListener("pointerup", endDrag);
+  document.addEventListener("pointercancel", endDrag);
 
   function renderSettings(data, split, index) {
     document.getElementById("settings-title").textContent = `Edit ${split.name}`;
@@ -2586,6 +2671,7 @@
   }
 
   function routeChanged() {
+    if (drag) endDrag({ type: "pointercancel", pointerId: drag.pointerId }); // leaving drops nothing
     reordering = false;
     showScreen();
     applyUpdateIfSafe();
@@ -2845,11 +2931,11 @@
     if (updateData((data) => { data.splits.splice(index, 1); })) showScreen();
   }
 
-  function moveItem(scope, index, delta) {
+  function moveItem(scope, from, to) {
     const saved = updateData((data) => {
       const list = scope === "splits" ? data.splits : data.splits[currentSplit].exercises;
-      const [item] = list.splice(index, 1);
-      list.splice(index + delta, 0, item);
+      const [item] = list.splice(from, 1);
+      list.splice(to, 0, item);
     });
     if (saved) showScreen();
   }
@@ -3183,7 +3269,6 @@
     if (button.dataset.edit) openEditor(button.dataset.edit);
     if (button.dataset.add !== undefined) openEditor(null);
     if (button.dataset.type) setEditorType(button.dataset.type);
-    if (button.dataset.move) moveItem(button.dataset.scope, Number(button.dataset.index), Number(button.dataset.move));
     if (button.dataset.editBody !== undefined) openBodyEditor();
     if (button.dataset.deleteBody) deleteWeighIn(button.dataset.deleteBody);
     if (button.dataset.editSplit) openSplitEditor(Number(button.dataset.editSplit));
