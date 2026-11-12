@@ -354,6 +354,12 @@
   #progress-area .wide-pill { flex: 0 0 auto; min-height: 48px; }
   .metric-line { flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 8px; }
   .metric-line .metric-row { margin-top: 0; }
+  .range-row { flex-shrink: 0; display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; margin-top: 10px; }
+  .range-row button { min-height: 44px; padding: 4px 2px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; background: none; color: var(--text); }
+  .range-row b { font-size: 0.85rem; font-weight: 600; }
+  .range-row small { font-size: 0.72rem; color: var(--muted); white-space: nowrap; }
+  .range-row button.chosen { background: var(--text); color: var(--bg); border-color: var(--text); }
+  .range-row button.chosen small { color: var(--bg); }
   .metric-button { flex-shrink: 0; min-height: 44px; padding: 0 16px; font-size: 0.95rem; }
   /* Opening "Show numbers" swaps the chart for the table, so the card never grows. */
   #progress-area .chart-card:has(details[open]) .chart-slot { display: none; }
@@ -1917,7 +1923,7 @@
   }
 
   // The empty frame: hairline gridlines, value ticks and first and last dates.
-  function chartFrame(ticks, toY, firstDate, lastDate, description) {
+  function chartFrame(ticks, toY, firstDate, lastDate, description, labels = null) {
     const svg = svgElement("svg", { viewBox: `0 0 ${CHART.width} ${CHART.height}`, role: "img", "aria-label": description });
     for (const tick of ticks) {
       const y = toY(tick);
@@ -1928,9 +1934,9 @@
     }
     const dateY = CHART.height - 6;
     const first = svgElement("text", { x: CHART.left, y: dateY });
-    first.textContent = shortDate(firstDate);
+    first.textContent = labels ? labels[0] : shortDate(firstDate);
     const last = svgElement("text", { x: CHART.width - CHART.right, y: dateY, "text-anchor": "end" });
-    last.textContent = shortDate(lastDate);
+    last.textContent = labels ? labels[1] : shortDate(lastDate);
     svg.append(first, last);
     return svg;
   }
@@ -1989,16 +1995,22 @@
     const ticks = [];
     for (let tick = bottom; tick <= top + step / 2; tick += step) ticks.push(tick);
 
-    const firstDay = dayNumber(entries[0].date);
-    const span = dayNumber(entries[entries.length - 1].date) - firstDay || 1;
+    // Points with `at` (an exact time) are spread by time, for a day or a few days of weigh-ins.
+    const timed = entries.every((entry) => entry.at);
+    const position = (entry) => (timed ? entry.at / 86400000 : dayNumber(entry.date));
+    const firstDay = position(entries[0]);
+    const span = position(entries[entries.length - 1]) - firstDay || 1;
     const plotWidth = CHART.width - CHART.left - CHART.right;
-    const toX = (date) => CHART.left + ((dayNumber(date) - firstDay) / span) * plotWidth;
+    const toX = (entry) => CHART.left + ((position(entry) - firstDay) / span) * plotWidth;
     const toY = (value) => CHART.height - CHART.bottom - ((value - bottom) / (top - bottom)) * (CHART.height - CHART.top - CHART.bottom);
 
     const latest = entries[entries.length - 1];
     const description = `From ${values[0]}${unit} on ${shortDate(entries[0].date)} to ${latest.value}${unit} on ${shortDate(latest.date)}`;
-    const svg = chartFrame(ticks, toY, entries[0].date, latest.date, description);
-    const points = entries.map((entry) => ({ ...entry, x: toX(entry.date), y: toY(entry.value) }));
+    const sameDay = timed && entries[0].date === latest.date;
+    const clock = (entry) => new Date(entry.at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+    const labels = sameDay ? [clock(entries[0]), clock(latest)] : null;
+    const svg = chartFrame(ticks, toY, entries[0].date, latest.date, description, labels);
+    const points = entries.map((entry) => ({ ...entry, x: toX(entry), y: toY(entry.value) }));
     svg.append(svgElement("polyline", {
       points: points.map((point) => `${point.x},${point.y}`).join(" "),
       fill: "none",
@@ -2015,7 +2027,7 @@
       svg.append(endLabel);
     }
 
-    const describePoint = (point) => `${formatDate(point.date)}: ${point.value}${unit}`;
+    const describePoint = (point) => `${formatDate(point.date)}${point.at ? `, ${clock(point)}` : ""}: ${point.value}${unit}`;
     const readout = chartReadout(describePoint(end));
     addReadout(svg, readout, points, describePoint);
     return { svg, readout };
@@ -2168,13 +2180,30 @@
     slot.className = "chart-slot";
     // Holds the readout's line before the chart is drawn, so the chart is sized for the space left.
     const readoutSpace = chartReadout("\u00a0");
-    card.append(line, slot, readoutSpace);
 
-    // One point per day: the average of that day's weigh-ins.
-    const byDay = new Map();
-    for (const entry of entries) byDay.set(entry.date, [...(byDay.get(entry.date) || []), entry.weight]);
-    const series = [...byDay].sort(([a], [b]) => a.localeCompare(b))
-      .map(([date, weights]) => ({ date, value: Math.round((weights.reduce((sum, kg) => sum + kg, 0) / weights.length) * 10) / 10 }));
+    // The range picker doubles as a summary: each button shows the change over its range.
+    const chosen = WEIGHT_RANGES.find(([label]) => label === weightRange()) || WEIGHT_RANGES[1];
+    const series = weightSeries(entries, chosen);
+    if (entries.length > 0) {
+      const ranges = document.createElement("div");
+      ranges.className = "range-row";
+      ranges.replaceChildren(...WEIGHT_RANGES.map((range) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.classList.toggle("chosen", range === chosen);
+        button.dataset.weightRange = range[0];
+        const name = document.createElement("b");
+        name.textContent = range[0];
+        const change = document.createElement("small");
+        change.textContent = weightChange(weightSeries(entries, range));
+        button.append(name, change);
+        button.setAttribute("aria-label", `${range[2]}: ${change.textContent}`);
+        return button;
+      }));
+      card.append(line, ranges, slot, readoutSpace);
+    } else {
+      card.append(line, slot, readoutSpace);
+    }
     if (entries.length > 0) {
       card.append(chartTable([...entries].reverse().map((entry) => {
         const remove = document.createElement("button");
@@ -2197,11 +2226,56 @@
       if (drawn) return;
       // Say why there's no chart rather than leaving a gap.
       if (entries.length === 0) readoutSpace.remove();
-      else if (series.length < 2) readoutSpace.textContent = "Weigh in on another day to see a chart.";
+      else if (series.length === 0) readoutSpace.textContent = "No weigh-ins in this range.";
+      else if (series.length < 2) readoutSpace.textContent = chosen[0] === "D" || chosen[0] === "4D" ? "Only one weigh-in in this range." : "Only one day in this range.";
       else readoutSpace.textContent = "No room for the chart here. Show numbers lists every weigh-in.";
     };
     return card;
   }
+
+  // Weight ranges: [button, days back (0 = today only), name, plotted by time?]. Months go by the
+  // calendar. The short ranges plot every weigh-in at its time; the longer ones one average per day.
+  const WEIGHT_RANGES = [
+    ["3M", { months: 3 }, "Last 3 months"],
+    ["M", { months: 1 }, "Last month"],
+    ["W", { days: 6 }, "Last 7 days"],
+    ["4D", { days: 3, timed: true }, "Last 4 days"],
+    ["D", { days: 0, timed: true }, "Today"],
+  ];
+  const WEIGHT_RANGE_KEY = "gymTracker.weightRange"; // this phone's choice only, so not synced
+
+  function weightRange() {
+    try { return localStorage.getItem(WEIGHT_RANGE_KEY) || "M"; } catch { return "M"; }
+  }
+
+  function weightSeries(entries, [, span]) {
+    const start = new Date();
+    start.setHours(0, 0, 0, 0);
+    if (span.months) start.setMonth(start.getMonth() - span.months);
+    else start.setDate(start.getDate() - span.days);
+    const inRange = entries.filter((entry) => loggedAt(entry) >= start.getTime()).sort((a, b) => loggedAt(a) - loggedAt(b));
+    if (span.timed) return inRange.map((entry) => ({ date: entry.date, at: loggedAt(entry), value: entry.weight }));
+    // One point per day: the average of that day's weigh-ins.
+    const byDay = new Map();
+    for (const entry of inRange) byDay.set(entry.date, [...(byDay.get(entry.date) || []), entry.weight]);
+    return [...byDay].sort(([a], [b]) => a.localeCompare(b))
+      .map(([date, weights]) => ({ date, value: Math.round((weights.reduce((sum, kg) => sum + kg, 0) / weights.length) * 10) / 10 }));
+  }
+
+  // First point to last: "−2.0 kg", "+0.4 kg", or a dash when there's nothing to compare.
+  function weightChange(series) {
+    if (series.length < 2) return "–";
+    const change = Math.round((series[series.length - 1].value - series[0].value) * 10) / 10;
+    if (change === 0) return "0 kg";
+    return `${change > 0 ? "+" : "\u2212"}${Math.abs(change).toFixed(1)} kg`;
+  }
+
+  progressArea.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-weight-range]");
+    if (!button) return;
+    try { localStorage.setItem(WEIGHT_RANGE_KEY, button.dataset.weightRange); } catch { /* still redraws */ }
+    renderProgress(loadData());
+  });
 
   // Runs once the screen is showing, because the charts are sized to the space they're given.
   function renderProgress(data) {
