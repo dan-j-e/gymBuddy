@@ -7,7 +7,7 @@
 <link rel="icon" type="image/png" href="icon.png">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="manifest" href="manifest.webmanifest">
-<meta name="theme-color" content="#121212">
+<meta name="theme-color" content="#060708">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Gym Buddy">
@@ -737,6 +737,175 @@
   .reordering > .edit-line { transition: transform 0.15s ease-out; }
   .reordering > .edit-line.lifted { transition: none; position: relative; z-index: 2; }
   .edit-line.lifted > * { background: #2a2a2a; border-color: var(--text); }
+
+  /* ===== Specter look =====
+     "Ghost edition": near-black, see-through glass cards, a faint shimmer on the split cards, wide
+     headings and soft white glows. It sits on top of the Bones look, so deleting this block brings
+     the plain greys back. The three fonts are bundled in fonts/ (open-licensed) and kept by sw.js,
+     so nothing is fetched from anyone else. No backdrop blur: the page behind is near-flat black,
+     so blur would cost phone speed without showing. */
+  @font-face { font-family: "Unbounded"; src: url("fonts/unbounded.woff2") format("woff2"); font-weight: 200 900; font-display: swap; }
+  @font-face { font-family: "Space Grotesk"; src: url("fonts/space-grotesk.woff2") format("woff2"); font-weight: 300 700; font-display: swap; }
+  @font-face { font-family: "JetBrains Mono"; src: url("fonts/jetbrains-mono.woff2") format("woff2"); font-weight: 100 800; font-display: swap; }
+  :root {
+    --bg: #060708;
+    --card: rgba(255, 255, 255, 0.035);
+    --solid-card: #0d0e11; /* for things that overlap others: popups and a row being dragged */
+    --line: rgba(255, 255, 255, 0.10);
+    --text: #eef0f4;
+    --muted: #7d838e;
+    --ink: #0b0c0f;
+    --pill: rgba(255, 255, 255, 0.04);
+    --pill-hint: #6d737d;
+    --accent: #c9d3ff; /* pale periwinkle, used sparingly */
+    --chart: #c9d3ff;
+    --danger: #ff8a9a;
+    --off: #5a5f69; /* greyed out: as bright as the Bones grey, so still visible on near-black */
+    --success: #9ff0d2; /* pale mint, from the shimmer */
+    --glow: 0 0 30px rgba(210, 225, 255, 0.35);
+    --radius: 22px;
+    --title-font: "Unbounded", -apple-system, BlinkMacSystemFont, sans-serif;
+    --body-font: "Space Grotesk", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    --mono-font: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  body {
+    font-family: var(--body-font);
+    background:
+      radial-gradient(50% 30% at 85% 12%, rgba(160, 190, 255, 0.16), transparent 70%),
+      radial-gradient(45% 30% at 10% 70%, rgba(140, 255, 230, 0.08), transparent 70%),
+      var(--bg);
+  }
+  /* A very fine dot grain over everything, never in the way of a tap */
+  body::after {
+    content: ""; position: fixed; inset: 0; z-index: 0; pointer-events: none;
+    background-image: radial-gradient(rgba(255, 255, 255, 0.5) 0.5px, transparent 0.6px);
+    background-size: 3px 3px; opacity: 0.12;
+  }
+
+  button, input, .chart-card, #install-hint, .summary-item { border-radius: var(--radius); border-color: var(--line); }
+  button { background: var(--card); transition: background-color 0.2s ease-out, color 0.2s ease-out, box-shadow 0.2s ease-out, border-color 0.2s ease-out; }
+  button:active { background: rgba(255, 255, 255, 0.09); }
+  input { background: var(--pill); color: var(--text); font-family: var(--body-font); }
+  input:focus { outline: 1px solid var(--accent); outline-offset: -1px; box-shadow: 0 0 18px rgba(201, 211, 255, 0.25); }
+
+  /* Headings: wide and heavy, with a soft glow */
+  h1 {
+    font-family: var(--title-font); font-weight: 800; font-size: clamp(1.5rem, 7.5vw, 2rem);
+    letter-spacing: -0.01em; line-height: 1.1; text-shadow: 0 0 22px rgba(200, 215, 255, 0.45);
+  }
+  #history-title, #settings-title { font-size: clamp(1.15rem, 5.5vw, 1.5rem); }
+  #greeting { font-family: var(--mono-font); font-size: 0.9rem; }
+  #greeting::before { content: "// "; }
+
+  /* Action buttons: monospace, in caps */
+  .primary, .wide-pill, #reorder-toggle, .quiet, .metric-button, .range-row button, .confirm-buttons button,
+  #log-history, #log-delete, #install-go, .tag-row button, #toast.undo button, .chart-card summary {
+    font-family: var(--mono-font); font-weight: 500; letter-spacing: 0.06em; text-transform: uppercase;
+  }
+  .primary, .wide-pill { font-size: 0.9rem; }
+  #app-settings .bottom-bar .wide-pill { font-size: 0.8rem; letter-spacing: 0.04em; }
+  .chart-card summary { font-size: 0.75rem; }
+  .range-row button { font-size: 0.75rem; letter-spacing: 0.02em; }
+  .range-row button.chosen { font-size: 0.72rem; }
+  .tag-row button { font-size: 0.75rem; letter-spacing: 0.04em; }
+
+  /* Solid near-white with a glow: the main action, chosen options, and Done while reordering */
+  .primary, #tick, #install-go, .toggle button.chosen, #reorder-toggle.chosen, .range-row button.chosen,
+  .tag-row button.chosen, .edit-row small {
+    background: rgba(255, 255, 255, 0.92); color: var(--ink); border-color: transparent; box-shadow: var(--glow);
+  }
+  .edit-row small { box-shadow: none; font-family: var(--mono-font); font-size: 0.7rem; letter-spacing: 0.04em; text-transform: uppercase; }
+  .primary:disabled, #tick:disabled, .name-editor .primary:disabled { background: var(--card); color: var(--off); border-color: var(--line); box-shadow: none; }
+  #workout-button.active { background: var(--card); color: var(--text); border-color: rgba(255, 255, 255, 0.5); box-shadow: none; }
+  .back, #reorder-toggle, .move, #install-dismiss, .delete-small, .chart-card .wide-pill, .toggle button { background: var(--card); color: var(--text); }
+  .move:disabled, #log-repeat:disabled, #log-history:disabled { color: var(--off); }
+  #purge-go:not(:disabled), #confirm-ok.danger-fill { background: var(--danger); border-color: var(--danger); color: var(--ink); box-shadow: 0 0 24px rgba(255, 138, 154, 0.3); }
+  .delete, #log-delete, .settings-row.danger, .wide-pill.danger { color: var(--danger); }
+
+  /* Home: the split cards. Glass, a thin shimmering edge, a soft light on the right, the
+     split's number in the corner, and "ghost" names that fill in to white when pressed. */
+  .row-list { counter-reset: split; }
+  .row {
+    counter-increment: split;
+    container-type: size; /* lets the name size itself to this card, however many splits share the screen */
+    align-items: center;
+    padding: 0 52px 0 22px; /* the right side keeps clear of the split's number */
+    border-color: transparent;
+    background:
+      radial-gradient(130px 100px at 84% 58%, rgba(170, 190, 255, 0.11), transparent 70%),
+      linear-gradient(135deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.015));
+    color: var(--text);
+    font-family: var(--title-font);
+    font-size: clamp(1.5rem, 9vw, 2.6rem);
+    font-weight: 800;
+    letter-spacing: -0.01em;
+    overflow: hidden;
+  }
+  .row::before {
+    content: ""; position: absolute; inset: 0; border-radius: inherit; padding: 1px; pointer-events: none;
+    background: conic-gradient(from 200deg, rgba(255, 255, 255, 0.05), rgba(170, 200, 255, 0.55),
+      rgba(160, 255, 230, 0.35), rgba(255, 190, 240, 0.35), rgba(255, 255, 255, 0.05));
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    mask-composite: exclude;
+  }
+  .row::after {
+    content: counter(split, decimal-leading-zero);
+    position: absolute; top: 12px; right: 18px;
+    width: auto; height: auto; background: none; border-radius: 0;
+    color: var(--muted); font-family: var(--mono-font); font-size: 0.75rem; font-weight: 400; line-height: 1; letter-spacing: 0.08em;
+  }
+  .row > span {
+    min-width: 0;
+    font-size: clamp(0.9rem, min(12cqw, 34cqh), 2.6rem);
+    line-height: 1.05;
+    overflow-wrap: anywhere;
+    color: transparent;
+    background: linear-gradient(180deg, rgba(240, 244, 255, 0.95), rgba(240, 244, 255, 0.32));
+    -webkit-background-clip: text; background-clip: text;
+    transition: text-shadow 0.25s ease-out;
+  }
+  .row:active { background: linear-gradient(135deg, rgba(255, 255, 255, 0.10), rgba(255, 255, 255, 0.02)); }
+  .row:active > span { color: #fff; text-shadow: 0 0 28px rgba(210, 225, 255, 0.7); }
+
+  /* Exercise rows and name lists use the wide face; set lists stay in the body face */
+  .bubble { background: var(--card); color: var(--text); font-family: var(--title-font); font-size: 0.95rem; font-weight: 600; letter-spacing: 0; }
+  .edit-row { font-family: var(--body-font); font-size: 1.05rem; }
+  #split-list .edit-row, #settings-list .edit-row { font-family: var(--title-font); font-size: 0.95rem; font-weight: 600; }
+  #split-list .edit-row { font-weight: 700; }
+  .today-count, .set-date, .chart-card svg text, .chart-title, .settings-heading, #summary-stats { font-family: var(--mono-font); }
+  .today-count { font-size: 0.72rem; letter-spacing: 0.04em; }
+  .set-date { font-size: 0.8rem; }
+  #bubbles .add-box { border: 1px dashed rgba(255, 255, 255, 0.28); font-family: var(--mono-font); font-size: 0.85rem; letter-spacing: 0.06em; text-transform: uppercase; }
+  #bubbles .add-box:active { background: rgba(255, 255, 255, 0.06); }
+  .edit-line.lifted > * { background: var(--solid-card); border-color: rgba(255, 255, 255, 0.5); box-shadow: var(--glow); }
+
+  /* Settings */
+  .settings-heading { color: var(--accent); font-size: 0.75rem; font-weight: 700; letter-spacing: 0.12em; text-shadow: 0 0 14px rgba(201, 211, 255, 0.45); }
+  .settings-row { background: var(--card); }
+
+  /* Progress */
+  .chart-card { background: var(--card); }
+  .chart-title { font-size: 0.72rem; letter-spacing: 0.12em; text-transform: uppercase; }
+  .hero-figure { font-family: var(--title-font); font-weight: 300; font-size: 2.4rem; }
+  .chart-card svg text { font-size: 10px; }
+  .chart-card svg path, .chart-card svg polyline { filter: drop-shadow(0 0 5px rgba(200, 220, 255, 0.5)); }
+  .chart-card svg circle { fill: #fff; stroke: var(--bg); }
+
+  /* Popups and messages */
+  dialog { background: var(--solid-card); border: 1px solid var(--line); border-radius: 26px; box-shadow: 0 0 40px rgba(0, 0, 0, 0.6); }
+  dialog::backdrop { background: rgba(2, 3, 4, 0.7); }
+  #toast { background: rgba(255, 255, 255, 0.95); color: var(--ink); border-radius: var(--radius); font-family: var(--mono-font); font-size: 0.85rem; font-weight: 500; letter-spacing: 0.03em; box-shadow: var(--glow); }
+  #toast.success { background: var(--success); border-color: var(--success); color: var(--ink); box-shadow: 0 0 30px rgba(159, 240, 210, 0.4); }
+  #toast.undo button { background: var(--ink); color: var(--text); border-color: var(--ink); }
+
+  /* Screens sit above the grain */
+  .screen { position: relative; z-index: 1; }
+
+  @media (prefers-reduced-motion: reduce) {
+    button, .row > span { transition: none; }
+  }
   .edit-line.lifted .grip { cursor: grabbing; }
 </style>
 </head>

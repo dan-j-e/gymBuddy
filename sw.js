@@ -2,7 +2,8 @@
 // Each open shows the saved copy and quietly fetches a fresh one. If the page has changed, it tells
 // the app, which reloads when it's safe. Only the app's own files go through here, never logged data.
 const CACHE = "gym-buddy-v1";
-const FILES = ["./", "manifest.webmanifest", "icon.png", "apple-touch-icon.png", "icon-192.png", "icon-512.png"];
+const FILES = ["./", "manifest.webmanifest", "icon.png", "apple-touch-icon.png", "icon-192.png", "icon-512.png",
+  "fonts/unbounded.woff2", "fonts/space-grotesk.woff2", "fonts/jetbrains-mono.woff2"];
 const PAGE_PATH = new URL("./", location).pathname;
 
 self.addEventListener("install", (event) => {
