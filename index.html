@@ -342,12 +342,13 @@
     gap: var(--gap);
   }
   #progress-area > .chart-card {
-    flex: 1 1 0;
+    flex: 2 1 0; /* Moved today gets 2 parts of the height... */
     min-height: 0;
     display: flex;
     flex-direction: column;
     overflow: hidden;
   }
+  #progress-area > .chart-card + .chart-card { flex-grow: 3; } /* ...and Your body 3, for its ranges and longer history */
   .chart-slot { flex: 1 1 0; min-height: 0; overflow: hidden; }
   #progress-area .chart-slot svg { height: 100%; margin-top: 0; }
   #progress-area details { flex: 0 1 auto; min-height: 0; overflow-y: auto; }
@@ -778,7 +779,16 @@
 <main id="progress" class="screen" hidden>
   <h1>Progress</h1>
   <div id="progress-area"></div>
-  <button class="back" data-go="" aria-label="Back"><svg class="icon" aria-hidden="true"><use href="#i-back"/></svg></button>
+  <div class="bottom-bar">
+    <button class="back" data-go="" aria-label="Back"><svg class="icon" aria-hidden="true"><use href="#i-back"/></svg></button>
+    <button class="wide-pill" data-go="workouts">Past workouts</button>
+  </div>
+</main>
+
+<main id="workouts" class="screen" hidden>
+  <h1>Past workouts</h1>
+  <div id="workout-list" class="scroll-area"></div>
+  <button class="back" data-go="progress" aria-label="Back"><svg class="icon" aria-hidden="true"><use href="#i-back"/></svg></button>
 </main>
 
 <main id="app-settings" class="screen" hidden>
@@ -836,7 +846,7 @@
   <p id="summary-stats" class="summary-stats"></p>
   <div id="summary-list" class="scroll-area"></div>
   <div class="bottom-bar">
-    <button class="back" data-go="" aria-label="Back"><svg class="icon" aria-hidden="true"><use href="#i-back"/></svg></button>
+    <button id="summary-back" class="back" data-go="" aria-label="Back"><svg class="icon" aria-hidden="true"><use href="#i-back"/></svg></button>
     <button id="finish-workout" class="primary" hidden>Finish workout</button>
   </div>
 </main>
@@ -1789,11 +1799,14 @@
 
   // The running workout so far (with Finish), or else the most recent finished one:
   // how long, how much, and each exercise in the order it was first done.
-  function renderSummary(data) {
-    const active = data.activeWorkout;
-    const workout = active ? { ...active, end: Date.now() } : (data.workouts || [])[(data.workouts || []).length - 1];
+  // "#summary/<id>" shows one past workout, opened from Past workouts, and goes back there.
+  function renderSummary(data, pastId = "") {
+    const past = pastId ? (data.workouts || []).find((workout) => workout.id === pastId) : null;
+    const active = past ? null : data.activeWorkout;
+    const workout = past || (active ? { ...active, end: Date.now() } : (data.workouts || [])[(data.workouts || []).length - 1]);
     const list = document.getElementById("summary-list");
-    document.getElementById("summary-title").textContent = active ? "Workout so far" : "Workout done";
+    document.getElementById("summary-title").textContent = past ? workoutDay(past) : active ? "Workout so far" : "Workout done";
+    document.getElementById("summary-back").dataset.go = pastId ? "workouts" : "";
     document.getElementById("finish-workout").hidden = !active;
     if (!workout) {
       document.getElementById("summary-stats").textContent = "No finished workouts yet.";
@@ -1824,6 +1837,42 @@
       detail.style.whiteSpace = "pre-line";
       item.append(heading, detail);
       return item;
+    }));
+  }
+
+  // "Thu 12 Nov", plus the year if it isn't this one.
+  function workoutDay(workout) {
+    const start = new Date(workout.start);
+    const options = { weekday: "short", day: "numeric", month: "short" };
+    if (start.getFullYear() !== new Date().getFullYear()) options.year = "numeric";
+    return start.toLocaleDateString(undefined, options);
+  }
+
+  // Newest first: the day, how long, and how many sets. Tapping one opens its summary.
+  function renderWorkoutList(data) {
+    const list = document.getElementById("workout-list");
+    const workouts = [...(data.workouts || [])].sort((a, b) => b.start - a.start);
+    if (workouts.length === 0) {
+      const hint = document.createElement("p");
+      hint.className = "hint";
+      hint.textContent = "No finished workouts yet. Start one from the home screen, then tap it to finish.";
+      list.replaceChildren(hint);
+      return;
+    }
+    list.replaceChildren(...workouts.map((workout) => {
+      const sets = [...workoutSets(data, workout.start, workout.end).values()].flat().length;
+      const row = document.createElement("button");
+      row.className = "edit-row";
+      row.dataset.go = `summary/${workout.id}`;
+      const label = document.createElement("span");
+      label.textContent = workoutDay(workout);
+      const detail = document.createElement("small");
+      detail.className = "set-date";
+      const time = new Date(workout.start).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+      detail.textContent = `${time} · ${workoutLength(workout.start, workout.end)} · ${sets} ${sets === 1 ? "set" : "sets"}`;
+      label.append(detail);
+      row.append(label);
+      return row;
     }));
   }
 
@@ -2362,9 +2411,12 @@
     } else if (route === "debug") {
       showOnly("debug-screen");
       showScreenCheck();
-    } else if (route === "summary") {
-      renderSummary(data);
+    } else if (route === "summary" || route.startsWith("summary/")) {
+      renderSummary(data, route.slice("summary/".length));
       showOnly("summary");
+    } else if (route === "workouts") {
+      renderWorkoutList(data);
+      showOnly("workouts");
     } else if (route === "progress") {
       showOnly("progress");
       renderProgress(data);
